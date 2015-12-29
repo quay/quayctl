@@ -18,6 +18,12 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	}
 	image := args[0]
 
+	// TODO(jschorr): implement this
+	// manifest, err := DownloadManifest(image)
+	// if err != nil {
+	//   return err
+	// }
+
 	// TODO(quentin-m): implement this
 	// imagePath, err := DownloadImage(image)
 	// if err != nil {
@@ -25,7 +31,7 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	// }
 
 	// TODO(jschorr): implement this
-	// err = ImportImage(imagePath)
+	// err = ImportImage(manifest, imagePath)
 	// if err != nil {
 	//   return err
 	// }
