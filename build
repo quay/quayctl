@@ -1,0 +1,11 @@
+#!/bin/bash -e
+
+ORG_PATH="github.com/coreos-inc"
+REPO_PATH="${ORG_PATH}/testpull"
+
+export GO15VENDOREXPERIMENT=1
+
+# Static compilation is useful when run in a container
+go clean -i net
+go install -tags netgo std
+go build -a -tags netgo --ldflags '-w -extldflags=-static' -o bin/quayctl ./cmd/quayctl
