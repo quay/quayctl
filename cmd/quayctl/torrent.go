@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 
+	"github.com/coreos-inc/testpull/manifest"
+
 	"github.com/spf13/cobra"
 )
 
@@ -35,11 +37,13 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	}
 	image := args[0]
 
-	// TODO(jschorr): implement this
-	// manifest, err := DownloadManifest(image)
-	// if err != nil {
-	//   return err
-	// }
+	// Download the image manifest.
+	retrieved, err := manifest.Download(image)
+	if err != nil {
+		log.Fatalf("Could not download image: %v", err)
+	}
+
+	log.Printf("Got manifest: %v", retrieved)
 
 	// TODO(quentin-m): implement this
 	// imagePath, err := DownloadImage(image)
