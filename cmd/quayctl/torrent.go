@@ -5,10 +5,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/coreos-inc/testpull/manifest"
+	"github.com/spf13/cobra"
 
 	"github.com/coreos-inc/testpull/bittorrent"
-	"github.com/spf13/cobra"
+	"github.com/coreos-inc/testpull/manifest"
 )
 
 var torrentFolder string
