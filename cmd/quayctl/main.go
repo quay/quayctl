@@ -18,7 +18,7 @@ var rootCommand = &cobra.Command{
 }
 
 func init() {
-	rootCommand.AddCommand(torrentPullCommand)
+	rootCommand.AddCommand(torrentCommand)
 }
 
 func main() {

@@ -2,13 +2,30 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/spf13/cobra"
 )
 
-var torrentPullCommand = &cobra.Command{
+func init() {
+	torrentCommand.AddCommand(torrentPullCommand)
+	torrentCommand.AddCommand(torrentSeedCommand)
+}
+
+var torrentCommand = &cobra.Command{
 	Use:   "torrent",
-	Short: "Pull an image via BitTorrent",
+	Short: "interact with Quay via BitTorrent",
+	Run:   torrentAction,
+}
+
+func torrentAction(cmd *cobra.Command, args []string) {
+	cmd.Usage()
+	os.Exit(1)
+}
+
+var torrentPullCommand = &cobra.Command{
+	Use:   "pull",
+	Short: "pull a container image",
 	Run:   torrentPullRun,
 }
 
@@ -37,4 +54,14 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	// }
 
 	log.Println("successfully imported image:", image)
+}
+
+var torrentSeedCommand = &cobra.Command{
+	Use:   "seed",
+	Short: "upload a container image indefinitely",
+	Run:   torrentSeedRun,
+}
+
+func torrentSeedRun(cmd *cobra.Command, args []string) {
+	// TODO(quentin-m): implement this
 }
