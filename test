@@ -15,7 +15,7 @@ COVER=${COVER:-"-cover"}
 source ./build
 
 TESTABLE=""
-FORMATTABLE="$TESTABLE cmd/quayctl"
+FORMATTABLE="$TESTABLE cmd/quayctl bittorrent manifest"
 
 # user has not provided PKG override
 if [ -z "$PKG" ]; then
