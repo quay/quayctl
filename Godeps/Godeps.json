@@ -229,6 +229,14 @@
 			"Rev": "9cbd2a1374f46905c68a4eb3694a130610adc62a"
 		},
 		{
+			"ImportPath": "github.com/golang/glog",
+			"Rev": "fca8c8854093a154ff1eb580aae10276ad6b1b5f"
+		},
+		{
+			"ImportPath": "github.com/golang/groupcache/lru",
+			"Rev": "604ed5785183e59ae2789449d89e73f3a2a77987"
+		},
+		{
 			"ImportPath": "github.com/gorilla/context",
 			"Rev": "1c83b3eabd45b6d76072b66b746c20815fb2872d"
 		},
@@ -241,9 +249,41 @@
 			"Rev": "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75"
 		},
 		{
+			"ImportPath": "github.com/jackpal/Taipei-Torrent/torrent",
+			"Rev": "579fdcf3b6df321c1a9c49045d3c0c4b1500b7c8"
+		},
+		{
+			"ImportPath": "github.com/jackpal/bencode-go",
+			"Rev": "ec35278e1ec008e45204189edb59379c2832e0ef"
+		},
+		{
+			"ImportPath": "github.com/jackpal/gateway",
+			"Rev": "192609c58b8985e645cbe82ddcb28a4362ca0fdc"
+		},
+		{
+			"ImportPath": "github.com/jackpal/go-nat-pmp",
+			"Rev": "46523a463303c6ede3ddfe45bde1c7ed52ebaacd"
+		},
+		{
+			"ImportPath": "github.com/kr/fs",
+			"Rev": "2788f0dbd16903de03cb8186e5c7d97b69ad387b"
+		},
+		{
+			"ImportPath": "github.com/nictuku/dht",
+			"Rev": "f9d42fea4f2e348f353fb14dddbb364b13b5374d"
+		},
+		{
+			"ImportPath": "github.com/nictuku/nettools",
+			"Rev": "8867a2107ad3a0998e2d36c67ed2115d9a399df8"
+		},
+		{
 			"ImportPath": "github.com/opencontainers/runc/libcontainer/user",
 			"Comment": "v0.0.6-19-gd97d5e8",
 			"Rev": "d97d5e8b007e4657316eed76ea30bc0f690230cf"
+		},
+		{
+			"ImportPath": "github.com/pkg/sftp",
+			"Rev": "e85cb2364df8ef0bbb95ec40f80836f01b856115"
 		},
 		{
 			"ImportPath": "github.com/russross/blackfriday",
@@ -278,7 +318,24 @@
 			"Rev": "d50e5c9283da469398d84078519de569f617be6f"
 		},
 		{
+			"ImportPath": "github.com/youtube/vitess/go/cache",
+			"Comment": "v2.0.0-alpha5-566-gbdd4eb3",
+			"Rev": "bdd4eb3ceba87934459739d3379fe7e7d0c5d2a4"
+		},
+		{
+			"ImportPath": "golang.org/x/crypto/curve25519",
+			"Rev": "f18420efc3b4f8e9f3d51f6bd2476e92c46260e9"
+		},
+		{
+			"ImportPath": "golang.org/x/crypto/ssh",
+			"Rev": "f18420efc3b4f8e9f3d51f6bd2476e92c46260e9"
+		},
+		{
 			"ImportPath": "golang.org/x/net/context",
+			"Rev": "0cb26f788dd4625d1956c6fd97ffc4c90669d129"
+		},
+		{
+			"ImportPath": "golang.org/x/net/proxy",
 			"Rev": "0cb26f788dd4625d1956c6fd97ffc4c90669d129"
 		},
 		{
