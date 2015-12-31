@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreos-inc/testpull/bittorrent"
+	"github.com/coreos-inc/testpull/dockerclient"
 	"github.com/coreos-inc/testpull/dockerdist"
 )
 
@@ -64,12 +65,12 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	credentials, _ := dockerdist.GetAuthCredentials(image)
 
 	// Build the list of torrent URLs, one per file system later.
-	torrents := make([]string, len(manifest.FSLayers))
+	torrents := make([]torrentInfo, len(manifest.FSLayers))
 	for index, layer := range manifest.FSLayers {
 		torrentUrl := url.URL{
 			Scheme: "https",
 			Host:   named.Hostname(),
-			Path:   fmt.Sprintf("/c1/torrent/%s/blob/%s", named.RemoteName(), layer.BlobSum.String()),
+			Path:   fmt.Sprintf("/c1/torrent/%s/blobs/%s", named.RemoteName(), layer.BlobSum.String()),
 		}
 
 		if insecureFlag {
@@ -80,7 +81,7 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 			torrentUrl.User = url.UserPassword(credentials.Username, credentials.Password)
 		}
 
-		torrents[index] = torrentUrl.String()
+		torrents[index] = torrentInfo{layer.BlobSum.String(), torrentUrl.String()}
 	}
 
 	// TODO(jzelinskie): Mute logs because Taipei-Torrent is super-verbose.
@@ -92,16 +93,16 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	defer bt.Shutdown()
 
 	// Download every layers in parallel.
-	paths := parallelTorrents(bt, torrents, 0)
-	log.Printf("Downloaded every layers to %v\n", paths)
+	results := parallelTorrents(bt, torrents, 0)
+	log.Printf("All layers downloaded; calling docker load")
 
-	// TODO(jschorr): implement this
-	// err = ImportImage(manifest, imagePath)
-	// if err != nil {
-	//   return err
-	// }
+	// Build a synthetic tar in docker-load format and load it into Docker.
+	lerr := dockerclient.DockerLoad(named, manifest, results)
+	if lerr != nil {
+		log.Fatalf("%v", lerr)
+	}
 
-	log.Println("successfully imported image:", image)
+	log.Println("Successfully imported image: ", image)
 }
 
 var torrentSeedCommand = &cobra.Command{
@@ -115,21 +116,7 @@ func torrentSeedRun(cmd *cobra.Command, args []string) {
 		log.Fatal("failed to specify one image to be seeded")
 	}
 	image := args[0]
-
-	// TODO(jschorr): implement this
-	torrents := []string{}
-
-	// TODO(jzelinskie): Mute logs because Taipei-Torrent is super-verbose.
-	// log.SetFlags(0)
-	// log.SetOutput(ioutil.Discard)
-
-	// Initialize Bittorrent client.
-	bt := initBitTorrentClient(torrentPort)
-	defer bt.Shutdown()
-
-	// Seed every layers in parallel.
-	parallelTorrents(bt, torrents, seedDuration)
-
+	// TODO: this
 	log.Println("successfully seeded image:", image)
 }
 
@@ -150,38 +137,45 @@ func initBitTorrentClient(port int) *bittorrent.Client {
 	return bt
 }
 
-func parallelTorrents(bt *bittorrent.Client, torrents []string, seedDuration time.Duration) (paths []string) {
-	ch := make(chan string)
+type torrentInfo struct {
+	key         string
+	torrentPath string
+}
+
+func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuration time.Duration) map[string]string {
+	ch := make(chan torrentInfo)
 
 	for _, torrent := range torrents {
-		go func(torrent string) {
+		go func(torrent torrentInfo) {
 			// Download and wait for download to finish.
-			log.Printf("Downloading %s\n", torrent)
-			path, keepSeeding, err := bt.Download(torrent, seedDuration)
+			log.Printf("Downloading %s\n", torrent.torrentPath)
+			path, keepSeeding, err := bt.Download(torrent.torrentPath, seedDuration)
 			if err != nil {
 				log.Fatal(err)
 			}
-			log.Printf("Finished downloading %s\n", torrent)
+			log.Printf("Finished downloading %s\n", torrent.torrentPath)
 
 			// Wait for seed to finish.
 			if seedDuration > 0 {
-				log.Printf("Seeding %s for %v\n", torrent, seedDuration)
+				log.Printf("Seeding %s for %v\n", torrent.torrentPath, seedDuration)
 				<-keepSeeding
-				log.Printf("Stopped seeding %v\n", torrent)
+				log.Printf("Stopped seeding %v\n", torrent.torrentPath)
 			}
 
 			// Signal success.
-			ch <- path
+			ch <- torrentInfo{torrent.key, path}
 		}(torrent)
 	}
 
-	// Wait for every torrents to finish.
+	// Wait for every torrent to finish.
+	results := map[string]string{}
+
 	for range torrents {
 		select {
 		case path := <-ch:
-			paths = append(paths, path)
+			results[path.key] = path.torrentPath
 		}
 	}
 
-	return
+	return results
 }
