@@ -1,6 +1,6 @@
-// manifest packages provides helper methods for retrieving and parsing a Docker manifest from
-// a remote repository.
-package manifest
+// dockerdist packages provides helper methods for retrieving and parsing a information from
+// a remote Docker repository.
+package dockerdist
 
 import (
 	"log"
@@ -9,6 +9,7 @@ import (
 
 	distlib "github.com/docker/distribution"
 	"github.com/docker/distribution/manifest/schema1"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/distribution"
 	"github.com/docker/docker/reference"
 	"github.com/docker/docker/registry"
@@ -19,7 +20,7 @@ import (
 
 // getRepositoryClient returns a client for performing registry operations against the given named
 // image.
-func getRepositoryClient(image reference.Named, scopes ...string) (distlib.Repository, error) {
+func getRepositoryClient(image reference.Named, insecure bool, scopes ...string) (distlib.Repository, error) {
 	// Lookup the index information for the name.
 	indexInfo, err := registry.ParseSearchIndexInfo(image.String())
 	if err != nil {
@@ -44,8 +45,13 @@ func getRepositoryClient(image reference.Named, scopes ...string) (distlib.Repos
 	metaHeaders := map[string][]string{}
 	tlsConfig := tlsconfig.ServerDefault
 
+	var url = "https://" + image.Hostname()
+	if insecure {
+		url = "http://" + image.Hostname()
+	}
+
 	endpoint := registry.APIEndpoint{
-		URL:          "https://" + image.Hostname(),
+		URL:          url,
 		Version:      registry.APIVersion2,
 		Official:     false,
 		TrimHostname: true,
@@ -69,18 +75,37 @@ func getTagOrDigest(image reference.Named) string {
 	return "latest"
 }
 
-// Downloads the manifest for the given image, using the given credentials.
-func Download(image string) (*schema1.SignedManifest, error) {
+// GetAuthCredentials returns the auth credentials (if any found) for the given repository, as found
+// in the user's docker config.
+func GetAuthCredentials(image string) (types.AuthConfig, error) {
+	// Lookup the index information for the name.
+	indexInfo, err := registry.ParseSearchIndexInfo(image)
+	if err != nil {
+		return types.AuthConfig{}, err
+	}
+
+	// Retrieve the user's Docker configuration file (if any).
+	configFile, err := cliconfig.Load(cliconfig.ConfigDir())
+	if err != nil {
+		return types.AuthConfig{}, err
+	}
+
+	// Resolve the authentication information for the registry specified, via the config file.
+	return registry.ResolveAuthConfig(configFile.AuthConfigs, indexInfo), nil
+}
+
+// DownloadManifest the manifest for the given image, using the given credentials.
+func DownloadManifest(image string, insecure bool) (reference.Named, *schema1.SignedManifest, error) {
 	// Parse the image name as a docker image reference.
 	named, err := reference.ParseNamed(image)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Create a reference to a repository client for the repo.
-	repo, err := getRepositoryClient(named, "pull")
+	repo, err := getRepositoryClient(named, insecure, "pull")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Retrieve the manifest for the tag.
@@ -88,18 +113,18 @@ func Download(image string) (*schema1.SignedManifest, error) {
 	ctx := context.Background()
 	manSvc, err := repo.Manifests(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	unverifiedManifest, err := manSvc.GetByTag(getTagOrDigest(named))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	_, verr := schema1.Verify(unverifiedManifest)
 	if verr != nil {
-		return nil, verr
+		return nil, nil, verr
 	}
 
-	return unverifiedManifest, nil
+	return named, unverifiedManifest, nil
 }

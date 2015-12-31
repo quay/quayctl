@@ -1,23 +1,27 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/coreos-inc/testpull/bittorrent"
-	"github.com/coreos-inc/testpull/manifest"
+	"github.com/coreos-inc/testpull/dockerdist"
 )
 
 var torrentFolder string
 var torrentPort int
 var seedDuration time.Duration
+var insecureFlag bool
 
 func init() {
 	torrentCommand.AddCommand(torrentPullCommand)
 	torrentCommand.PersistentFlags().IntVar(&torrentPort, "port", 0, "Port that listens for peer connections")
+	torrentCommand.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "If specified, HTTP is used in place of HTTPS to talk to the registry")
 
 	torrentCommand.AddCommand(torrentSeedCommand)
 	torrentSeedCommand.Flags().DurationVar(&seedDuration, "duration", 10*time.Minute, "Duration of the seeding")
@@ -49,15 +53,35 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	image := args[0]
 
 	// Download the image manifest.
-	retrieved, err := manifest.Download(image)
+	named, manifest, err := dockerdist.DownloadManifest(image, insecureFlag)
 	if err != nil {
 		log.Fatalf("Could not download image: %v", err)
 	}
 
-	log.Printf("Got manifest: %v", retrieved)
+	log.Printf("Got manifest for image; Downloading torrents.")
 
-	// TODO(jschorr): implement this
-	torrents := []string{}
+	// Retrieve the credentials (if any) for the current image.
+	credentials, _ := dockerdist.GetAuthCredentials(image)
+
+	// Build the list of torrent URLs, one per file system later.
+	torrents := make([]string, len(manifest.FSLayers))
+	for index, layer := range manifest.FSLayers {
+		torrentUrl := url.URL{
+			Scheme: "https",
+			Host:   named.Hostname(),
+			Path:   fmt.Sprintf("/c1/torrent/%s/blob/%s", named.RemoteName(), layer.BlobSum.String()),
+		}
+
+		if insecureFlag {
+			torrentUrl.Scheme = "http"
+		}
+
+		if credentials.Username != "" {
+			torrentUrl.User = url.UserPassword(credentials.Username, credentials.Password)
+		}
+
+		torrents[index] = torrentUrl.String()
+	}
 
 	// TODO(jzelinskie): Mute logs because Taipei-Torrent is super-verbose.
 	// log.SetFlags(0)
