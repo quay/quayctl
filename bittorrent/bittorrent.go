@@ -2,106 +2,169 @@ package bittorrent
 
 import (
 	"errors"
-	"math"
+	"fmt"
+	"log"
+	"path"
+	"strings"
 	"time"
 
-	"github.com/jackpal/Taipei-Torrent/torrent"
+	"github.com/dmartinpro/libtorrent-go"
 )
 
-// Client is a BitTorrent client wrapper around Taipei-Torrent, that exposes
-// the torrent structures in order to give us a (more) fine-grained control over them.
-// More specifically, it allows us to be notified when a torrent download finishes and to keep
-// seeding for a specified duration after that.
-//
-// However, please note that it drops LPD and DHT support.
+// Client wraps libtorrent and allows us to download torrents easily.
 type Client struct {
-	// Internal config for Taipei-Torrent
-	flags *torrent.TorrentFlags
-	// Listening port for peers
-	listenPort int
+	Running bool
 
-	// Torrents to start
-	startingTorrents chan *torrent.TorrentSession
-	// Current torrents
-	activeTorrents map[string]*torrent.TorrentSession
-	// Torrents to stop
-	stoppingTorrents chan *torrent.TorrentSession
-
-	// Shutdown
-	running     bool
-	quitChan    chan struct{}
-	stoppedChan chan struct{}
+	// The main libtorrent object.
+	session libtorrent.Session
+	// Contains the active torrents' handles.
+	torrents map[string]*torrent
+	// Refers to the configuration that has been used in NewClient to configure libtorrent.
+	config ClientConfig
 }
 
-// NewClient initializes a new Bittorrent client.
-func NewClient(listenPort int, downloadDir string) (*Client, error) {
-	flags := &torrent.TorrentFlags{
-		Port:               listenPort,
-		FileDir:            downloadDir,
-		SeedRatio:          math.Inf(0),
-		InitialCheck:       true,
-		FileSystemProvider: torrent.OsFsProvider{},
-	}
-
-	bt := &Client{
-		flags: flags,
-	}
-
-	return bt, nil
+// torrent stores the libtorrent handle referring an active torrent and a channel that is closed
+// once the torrent's download is finished.
+type torrent struct {
+	handle     libtorrent.Torrent_handle
+	isFinished chan struct{}
 }
 
-// Run starts the Bittorrent client, which will then be able to download .
-func (bt *Client) Run() error {
-	// Initialize data structures.
-	bt.startingTorrents = make(chan *torrent.TorrentSession, 1)
-	bt.activeTorrents = make(map[string]*torrent.TorrentSession)
-	bt.stoppingTorrents = make(chan *torrent.TorrentSession, 1)
-	bt.running = true
-	bt.quitChan = make(chan struct{})
-	bt.stoppedChan = make(chan struct{})
+// ClientConfig represents the configuration that can be passed to NewClient to
+// configure libtorrent.
+type ClientConfig struct {
+	LowerListenPort int
+	UpperListenPort int
 
-	// Start listening for peer.
-	conChan, listenPort, err := torrent.ListenForPeerConnections(bt.flags)
-	if err != nil {
-		return err
+	ConnectionsPerSecond int
+	MaxDownloadRate      int // bytes/s
+	MaxUploadRate        int // bytes/s
+
+	Encryption EncryptionMode
+
+	Debug bool
+}
+
+// EncryptionMode is the type that control the settings related to peer protocol encryption
+// in libtorrent.
+type EncryptionMode int
+
+const (
+	// FORCED allows only encrypted connections. Incoming connections that are not encrypted are
+	// closed and if the encrypted outgoing connection fails, a non-encrypted retry will not be made.
+	FORCED EncryptionMode = 0
+	// ENABLED allows both encrypted and non-encryption connections.
+	// An incoming non-encrypted connection will be accepted, and if an outgoing encrypted
+	// connection fails, a non- encrypted connection will be tried.
+	ENABLED = 1
+	// DISABLED only allows only non-encrypted connections.
+	DISABLED = 2
+)
+
+// NewClient initializes a new Bittorrent client using the specified configuration.
+func NewClient(config ClientConfig) *Client {
+	// Create session.
+	fingerprint := libtorrent.NewFingerprint("quayctl", 0, 1, 0, 0)
+	sessionFlags := int(libtorrent.SessionAdd_default_plugins)
+	session := libtorrent.NewSession(fingerprint, sessionFlags)
+
+	// Load all extensions.
+	session.Add_extensions()
+
+	// Enable alerts.
+	var alertMask libtorrent.LibtorrentAlertCategory_t
+	// status_notification is required, it is used to determine when a torrent is finished.
+	alertMask |= libtorrent.AlertStatus_notification
+	// error_notification is good to have at this point because the only error management that we do
+	// is at the moment when we start to listen and add a torrent. There is not error management
+	// except that. At least, we can output the errors to the user.
+	alertMask |= libtorrent.AlertError_notification
+	// For debug purposes, also enable these alerts:
+	if config.Debug {
+		alertMask |= libtorrent.AlertPeer_notification
+		alertMask |= libtorrent.AlertStorage_notification
+		alertMask |= libtorrent.AlertTracker_notification
+		alertMask |= libtorrent.AlertStats_notification
+		alertMask |= libtorrent.AlertPort_mapping_notification
+		alertMask |= libtorrent.AlertError_notification
 	}
-	bt.listenPort = listenPort
+	session.Set_alert_mask(uint(alertMask))
 
-mainLoop:
-	for {
-		select {
-		case ts := <-bt.startingTorrents:
-			if bt.running {
-				bt.activeTorrents[ts.M.InfoHash] = ts
-				go func(t *torrent.TorrentSession) {
-					t.DoTorrent()
-					bt.stoppingTorrents <- t
-				}(ts)
-			}
-		case ts := <-bt.stoppingTorrents:
-			delete(bt.activeTorrents, ts.M.InfoHash)
-
-			if bt.running == false && len(bt.activeTorrents) == 0 {
-				break mainLoop
-			}
-		case c := <-conChan:
-			if ts, ok := bt.activeTorrents[c.Infohash]; ok {
-				go ts.AcceptNewPeer(c)
-			}
-		case <-bt.quitChan:
-			bt.running = false
-			if len(bt.activeTorrents) == 0 {
-				break mainLoop
-			}
-			for _, ts := range bt.activeTorrents {
-				go ts.Quit()
-			}
-		}
+	// Configure client.
+	// Reference: http://www.rasterbar.com/products/libtorrent/reference-Settings.html
+	settings := session.Settings()
+	settings.SetAnnounce_to_all_tiers(true)
+	settings.SetAnnounce_to_all_trackers(true)
+	settings.SetPeer_connect_timeout(2)
+	settings.SetRate_limit_ip_overhead(true)
+	settings.SetRequest_timeout(5)
+	settings.SetTorrent_connect_boost(config.ConnectionsPerSecond * 10)
+	settings.SetConnection_speed(config.ConnectionsPerSecond)
+	if config.MaxDownloadRate > 0 {
+		settings.SetDownload_rate_limit(config.MaxDownloadRate)
 	}
+	if config.MaxUploadRate > 0 {
+		settings.SetUpload_rate_limit(config.MaxUploadRate)
+	}
+	session.Set_settings(settings)
 
-	close(bt.stoppedChan)
+	// Configure encryption policies.
+	encryptionSettings := libtorrent.NewPe_settings()
+	encryptionSettings.SetOut_enc_policy(byte(config.Encryption))
+	encryptionSettings.SetIn_enc_policy(byte(config.Encryption))
+	encryptionSettings.SetAllowed_enc_level(byte(libtorrent.Pe_settingsBoth))
+	encryptionSettings.SetPrefer_rc4(true)
+	session.Set_pe_settings(encryptionSettings)
+
+	return &Client{
+		session:  session,
+		torrents: make(map[string]*torrent),
+		config:   config,
+	}
+}
+
+// Start launches the configured Client and makes it ready to accept torrents.
+func (bt *Client) Start() error {
+	bt.Running = true
+
+	// Start alert monitoring.
+	go bt.alertsConsumer()
+
+	// Start services.
+	bt.session.Start_upnp()
+	bt.session.Start_natpmp()
+	bt.session.Start_lsd()
+
+	// Listen.
+	errCode := libtorrent.NewError_code()
+	defer libtorrent.DeleteError_code(errCode)
+	ports := libtorrent.NewStd_pair_int_int(bt.config.LowerListenPort, bt.config.UpperListenPort)
+	defer libtorrent.DeleteStd_pair_int_int(ports)
+	bt.session.Listen_on(ports, errCode)
+	if errCode.Value() != 0 {
+		return fmt.Errorf("Unable to start the Bittorrent client: error code %v, %v", errCode.Value(), errCode.Message())
+	}
 
 	return nil
+}
+
+// Stop interrupts every active torrents,.
+func (bt *Client) Stop() {
+	bt.Running = false
+
+	// Stop torrents.
+	for _, torrent := range bt.torrents {
+		bt.session.Remove_torrent(torrent.handle, 0)
+		close(torrent.isFinished)
+	}
+
+	// Stop services.
+	bt.session.Stop_lsd()
+	bt.session.Stop_upnp()
+	bt.session.Stop_natpmp()
+
+	// Delete session.
+	libtorrent.DeleteSession(bt.session)
 }
 
 // Download submits a new torrent to be downloaded.
@@ -114,48 +177,88 @@ mainLoop:
 //
 // Once the torrent has been downloaded, it will keep being seeded for the specified amount of time,
 // the returned channel will be closed at the end of the seeding period.
-//
-func (bt *Client) Download(t string, seedDuration time.Duration) (string, chan struct{}, error) {
-	if !bt.running {
-		return "", nil, errors.New("Use Run() before Download()")
+func (bt *Client) Download(torrentPath, downloadPath string, seedDuration time.Duration) (string, chan struct{}, error) {
+	if !bt.Running {
+		return "", nil, errors.New("Use Start() before Download()")
 	}
 
-	ts, err := torrent.NewTorrentSession(bt.flags, t, uint16(bt.listenPort))
-	if err != nil {
-		bt.stoppingTorrents <- &torrent.TorrentSession{}
-		return "", nil, err
+	// Create torrent parameters.
+	torrentParams := libtorrent.NewAdd_torrent_params()
+	if strings.HasPrefix(torrentPath, "http://") || strings.HasPrefix(torrentPath, "https://") || strings.HasPrefix(torrentPath, "magnet:") {
+		torrentParams.SetUrl(torrentPath)
+	} else {
+		torrentInfo := libtorrent.NewTorrent_info(torrentPath)
+		torrentParams.Set_torrent_info(torrentInfo)
 	}
-	bt.startingTorrents <- ts
+	torrentParams.SetSave_path(downloadPath)
+	// Set flags to 0 to disable auto-management !
+	torrentParams.SetFlags(0)
 
-	// Wait for download to end.
-	for {
-		time.Sleep(300 * time.Millisecond)
+	// Add torrent to the Bittorrent client.
+	errCode := libtorrent.NewError_code()
+	defer libtorrent.DeleteError_code(errCode)
+	handle := bt.session.Add_torrent(torrentParams)
+	if errCode.Value() != 0 {
+		return "", nil, fmt.Errorf("Unable to start torrent: error code %v, %v", errCode.Value(), errCode.Message())
+	}
+	bt.torrents[torrentPath] = &torrent{handle: handle, isFinished: make(chan struct{})}
 
-		// Check if the download is finished.
-		if ts.Session.HaveTorrent && ts.Session.Left == 0 {
-			// Close torrent session, optionally after seeding for a while.
-			keepSeedingChan := make(chan struct{})
-			if seedDuration > 0 {
-				go func() {
-					time.Sleep(seedDuration)
-					ts.Quit()
-					close(keepSeedingChan)
-				}()
-			} else {
-				ts.Quit()
-				close(keepSeedingChan)
+	// Wait for the download to finish.
+	<-bt.torrents[torrentPath].isFinished
+	path := path.Clean(downloadPath + "/" + handle.Torrent_file().Name())
+
+	// Seed for the specified duration.
+	keepSeedingChan := make(chan struct{})
+	if seedDuration > 0 {
+		go func() {
+			time.Sleep(seedDuration)
+			bt.session.Remove_torrent(handle, 0)
+			delete(bt.torrents, torrentPath)
+			close(keepSeedingChan)
+		}()
+	} else {
+		bt.session.Remove_torrent(handle, 0)
+		delete(bt.torrents, torrentPath)
+		close(keepSeedingChan)
+	}
+
+	return path, keepSeedingChan, nil
+}
+
+// alertsConsumer handles notifications that libtorrent sends.
+// At the moment, it is only used to mark a torrent as finished.
+func (bt *Client) alertsConsumer() {
+	for bt.Running {
+		if bt.session.Wait_for_alert(libtorrent.Milliseconds(250)).Swigcptr() != 0 {
+			alert := bt.session.Pop_alert()
+			switch alert.Xtype() {
+			case libtorrent.Torrent_finished_alertAlert_type:
+				handle := libtorrent.SwigcptrTorrent_finished_alert(alert.Swigcptr()).GetHandle()
+				if torrent := bt.findTorrent(handle); torrent != nil {
+					close(torrent.isFinished)
+				} else {
+					log.Printf("bittorrent: Unknown torrent %v finished", handle.Info_hash())
+				}
+			default:
+				if bt.config.Debug {
+					log.Printf("bittorrent: %s: %s", alert.What(), alert.Message())
+				}
 			}
-
-			return bt.flags.FileDir + "/" + ts.M.Info.Name, keepSeedingChan, nil
 		}
 	}
 }
 
-// Shutdown stops a running Bittorrent client and all its active torrents.
-func (bt *Client) Shutdown() {
-	if !bt.running {
-		return
+// findTorrent finds the torrent in our torrent list that corresponds to the specified handle.
+//
+// This is necessary because when a torrent is added, we don't know anything about it except
+// its .torrent file or its magnet link. So when libtorrent sends us a notification with an handle,
+// we have no common index to retrieve our torrent structure easily. Thus, we use .Equal() which is
+// an alias for the C++ == operator that will match the handle that we already have.
+func (bt *Client) findTorrent(torrent libtorrent.Torrent_handle) *torrent {
+	for _, t := range bt.torrents {
+		if torrent.Equal(t.handle) {
+			return t
+		}
 	}
-	bt.quitChan <- struct{}{}
-	<-bt.stoppedChan
+	return nil
 }
