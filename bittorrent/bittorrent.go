@@ -3,9 +3,14 @@ package bittorrent
 import (
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dmartinpro/libtorrent-go"
@@ -18,7 +23,8 @@ type Client struct {
 	// The main libtorrent object.
 	session libtorrent.Session
 	// Contains the active torrents' handles.
-	torrents map[string]*torrent
+	torrents     map[string]*torrent
+	torrentsLock sync.Mutex
 	// Refers to the configuration that has been used in NewClient to configure libtorrent.
 	config ClientConfig
 }
@@ -153,10 +159,12 @@ func (bt *Client) Stop() {
 	bt.Running = false
 
 	// Stop torrents.
+	bt.torrentsLock.Lock()
 	for _, torrent := range bt.torrents {
 		bt.session.Remove_torrent(torrent.handle, 0)
 		close(torrent.isFinished)
 	}
+	bt.torrentsLock.Unlock()
 
 	// Stop services.
 	bt.session.Stop_lsd()
@@ -177,14 +185,47 @@ func (bt *Client) Stop() {
 //
 // Once the torrent has been downloaded, it will keep being seeded for the specified amount of time,
 // the returned channel will be closed at the end of the seeding period.
-func (bt *Client) Download(torrentPath, downloadPath string, seedDuration time.Duration) (string, chan struct{}, error) {
+func (bt *Client) Download(sourcePath, downloadPath string, seedDuration time.Duration) (string, chan struct{}, error) {
 	if !bt.Running {
 		return "", nil, errors.New("Use Start() before Download()")
 	}
 
+	bt.torrentsLock.Lock()
+
+	// Verify that the torrent is unique first, otherwise we'll have trouble detecting the finished
+	// state.
+	if _, found := bt.torrents[sourcePath]; found {
+		bt.torrentsLock.Unlock()
+		return "", nil, errors.New("This torrent is already being downloaded.")
+	}
+
+	// Download .torrent file.
+	//
+	// An issue in libtorrent prevents it from using web seeds when torrents are added by URLs.
+	// As a workaround, we download the .torrent files to temp files and pass them to libtorrent.
+	torrentPath := sourcePath
+	if strings.HasPrefix(torrentPath, "http://") || strings.HasPrefix(torrentPath, "https://") {
+		f, err := ioutil.TempFile("", "quayctl-torrent")
+		if err != nil {
+			return "", nil, fmt.Errorf("Unable to start torrent: could not create temp file for .torrent.")
+		}
+		defer os.Remove(f.Name())
+
+		resp, err := http.Get(torrentPath)
+		if err != nil {
+			return "", nil, fmt.Errorf("Unable to start torrent: could not download .torrent file.")
+		}
+		defer resp.Body.Close()
+
+		io.Copy(f, resp.Body)
+		f.Close()
+
+		torrentPath = f.Name()
+	}
+
 	// Create torrent parameters.
 	torrentParams := libtorrent.NewAdd_torrent_params()
-	if strings.HasPrefix(torrentPath, "http://") || strings.HasPrefix(torrentPath, "https://") || strings.HasPrefix(torrentPath, "magnet:") {
+	if strings.HasPrefix(torrentPath, "magnet:") {
 		torrentParams.SetUrl(torrentPath)
 	} else {
 		torrentInfo := libtorrent.NewTorrent_info(torrentPath)
@@ -201,10 +242,12 @@ func (bt *Client) Download(torrentPath, downloadPath string, seedDuration time.D
 	if errCode.Value() != 0 {
 		return "", nil, fmt.Errorf("Unable to start torrent: error code %v, %v", errCode.Value(), errCode.Message())
 	}
-	bt.torrents[torrentPath] = &torrent{handle: handle, isFinished: make(chan struct{})}
+	bt.torrents[sourcePath] = &torrent{handle: handle, isFinished: make(chan struct{})}
+
+	bt.torrentsLock.Unlock()
 
 	// Wait for the download to finish.
-	<-bt.torrents[torrentPath].isFinished
+	<-bt.torrents[sourcePath].isFinished
 	path := path.Clean(downloadPath + "/" + handle.Torrent_file().Name())
 
 	// Seed for the specified duration.
@@ -212,13 +255,18 @@ func (bt *Client) Download(torrentPath, downloadPath string, seedDuration time.D
 	if seedDuration > 0 {
 		go func() {
 			time.Sleep(seedDuration)
+
+			bt.torrentsLock.Lock()
+			delete(bt.torrents, sourcePath)
 			bt.session.Remove_torrent(handle, 0)
-			delete(bt.torrents, torrentPath)
+			bt.torrentsLock.Unlock()
 			close(keepSeedingChan)
 		}()
 	} else {
+		bt.torrentsLock.Lock()
+		delete(bt.torrents, sourcePath)
 		bt.session.Remove_torrent(handle, 0)
-		delete(bt.torrents, torrentPath)
+		bt.torrentsLock.Unlock()
 		close(keepSeedingChan)
 	}
 
@@ -255,6 +303,8 @@ func (bt *Client) alertsConsumer() {
 // we have no common index to retrieve our torrent structure easily. Thus, we use .Equal() which is
 // an alias for the C++ == operator that will match the handle that we already have.
 func (bt *Client) findTorrent(torrent libtorrent.Torrent_handle) *torrent {
+	bt.torrentsLock.Lock()
+	defer bt.torrentsLock.Unlock()
 	for _, t := range bt.torrents {
 		if torrent.Equal(t.handle) {
 			return t
