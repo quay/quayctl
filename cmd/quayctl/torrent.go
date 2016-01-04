@@ -108,7 +108,7 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	defer bt.Stop()
 
 	// Download every layers in parallel.
-	results := parallelTorrents(bt, torrents, 0)
+	results := parallelTorrents(bt, torrents, nil)
 	log.Printf("All layers downloaded; calling docker load")
 
 	// Build a synthetic tar in docker-load format and load it into Docker.
@@ -174,7 +174,7 @@ type torrentInfo struct {
 	torrentPath string
 }
 
-func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuration time.Duration) map[string]string {
+func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuration *time.Duration) map[string]string {
 	ch := make(chan torrentInfo)
 
 	for _, torrent := range torrents {
@@ -188,7 +188,7 @@ func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuratio
 			log.Printf("Finished downloading %s to %s\n", torrent.torrentPath, path)
 
 			// Wait for seed to finish.
-			if seedDuration > 0 {
+			if seedDuration != nil {
 				log.Printf("Seeding %s for %v\n", torrent.torrentPath, seedDuration)
 				<-keepSeeding
 				log.Printf("Stopped seeding %v\n", torrent.torrentPath)

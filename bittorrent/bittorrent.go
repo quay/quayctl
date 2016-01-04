@@ -160,9 +160,8 @@ func (bt *Client) Stop() {
 
 	// Stop torrents.
 	bt.torrentsLock.Lock()
-	for _, torrent := range bt.torrents {
-		bt.session.Remove_torrent(torrent.handle, 0)
-		close(torrent.isFinished)
+	for sourcePath := range bt.torrents {
+		bt.deleteTorrent(sourcePath, nil)
 	}
 	bt.torrentsLock.Unlock()
 
@@ -185,7 +184,14 @@ func (bt *Client) Stop() {
 //
 // Once the torrent has been downloaded, it will keep being seeded for the specified amount of time,
 // the returned channel will be closed at the end of the seeding period.
-func (bt *Client) Download(sourcePath, downloadPath string, seedDuration time.Duration) (string, chan struct{}, error) {
+// There are three cases:
+// - seedDuration == nil, no seeding: the torrent is removed right away and keepSeedingChan
+// is closed.
+// - seedDuration > 0, seed for the specified duration: the torrent will be removed and
+// keepSeedingChan closed after that duration.
+// - seedDuration == 0, seed forever: the torrent will not be removed and keepSeedingChan will not
+// be closed until Stop() is called.
+func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.Duration) (string, chan struct{}, error) {
 	if !bt.Running {
 		return "", nil, errors.New("Use Start() before Download()")
 	}
@@ -252,25 +258,30 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration time.Du
 
 	// Seed for the specified duration.
 	keepSeedingChan := make(chan struct{})
-	if seedDuration > 0 {
-		go func() {
-			time.Sleep(seedDuration)
-
-			bt.torrentsLock.Lock()
-			delete(bt.torrents, sourcePath)
-			bt.session.Remove_torrent(handle, 0)
-			bt.torrentsLock.Unlock()
-			close(keepSeedingChan)
-		}()
-	} else {
+	if seedDuration == nil {
 		bt.torrentsLock.Lock()
-		delete(bt.torrents, sourcePath)
-		bt.session.Remove_torrent(handle, 0)
+		bt.deleteTorrent(sourcePath, keepSeedingChan)
 		bt.torrentsLock.Unlock()
-		close(keepSeedingChan)
+	} else if *seedDuration > 0 {
+		go func() {
+			time.Sleep(*seedDuration)
+			bt.torrentsLock.Lock()
+			bt.deleteTorrent(sourcePath, keepSeedingChan)
+			bt.torrentsLock.Unlock()
+		}()
 	}
 
 	return path, keepSeedingChan, nil
+}
+
+func (bt *Client) deleteTorrent(sourcePath string, keepSeedingChan chan struct{}) {
+	if torrent, found := bt.torrents[sourcePath]; found {
+		delete(bt.torrents, sourcePath)
+		bt.session.Remove_torrent(torrent.handle, 0)
+	}
+	if keepSeedingChan != nil {
+		close(keepSeedingChan)
+	}
 }
 
 // alertsConsumer handles notifications that libtorrent sends.
