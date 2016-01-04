@@ -65,8 +65,10 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	credentials, _ := dockerdist.GetAuthCredentials(image)
 
 	// Build the list of torrent URLs, one per file system later.
-	torrents := make([]torrentInfo, len(manifest.FSLayers))
-	for index, layer := range manifest.FSLayers {
+	blobSet := map[string]struct{}{}
+
+	var torrents = make([]torrentInfo, 0)
+	for _, layer := range manifest.FSLayers {
 		torrentUrl := url.URL{
 			Scheme: "https",
 			Host:   named.Hostname(),
@@ -81,7 +83,12 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 			torrentUrl.User = url.UserPassword(credentials.Username, credentials.Password)
 		}
 
-		torrents[index] = torrentInfo{layer.BlobSum.String(), torrentUrl.String()}
+		if _, found := blobSet[layer.BlobSum.String()]; found {
+			continue
+		}
+
+		torrents = append(torrents, torrentInfo{layer.BlobSum.String(), torrentUrl.String()})
+		blobSet[layer.BlobSum.String()] = struct{}{}
 	}
 
 	// TODO(jzelinskie): Mute logs because Taipei-Torrent is super-verbose.
