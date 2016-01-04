@@ -59,7 +59,7 @@ BUILD_PATH = build/$(TARGET_OS)_$(TARGET_ARCH)
 force:
 	@true
 
-libtorrent-go:
+build-envs:
 	$(GO) get -d $(LIBTORRENT_GO)
 	$(MAKE) -C $(LIBTORRENT_GO_HOME) PLATFORMS=$(PLATFORMS) build-envs
 
@@ -82,7 +82,7 @@ $(BUILD_PATH)/$(OUTPUT_NAME): $(BUILD_PATH) force
 
 $(NAME): $(BUILD_PATH)/$(OUTPUT_NAME)
 
-build: libtorrent-go force
+build: force
 	$(DOCKER) run --rm \
 		-v $(HOME):$(HOME) \
 		-e GOPATH=$(shell go env GOPATH) \
