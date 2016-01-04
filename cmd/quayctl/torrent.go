@@ -14,6 +14,7 @@ import (
 	"github.com/coreos-inc/testpull/dockerdist"
 )
 
+var torrentFingerprint bittorrent.ClientFingerprint
 var torrentFolder string
 var torrentLowerPort int
 var torrentUpperPort int
@@ -40,6 +41,7 @@ func init() {
 	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 10*time.Minute, "Duration of the seeding")
 
 	torrentFolder = os.TempDir() + "/quayctl/torrents"
+	torrentFingerprint = bittorrent.ClientFingerprint{"QU", 0, 1, 0, 0}
 }
 
 var torrentCommand = &cobra.Command{
@@ -152,6 +154,7 @@ func initBitTorrentClient() *bittorrent.Client {
 
 	// Create client.
 	bt := bittorrent.NewClient(bittorrent.ClientConfig{
+		Fingerprint:          torrentFingerprint,
 		LowerListenPort:      torrentLowerPort,
 		UpperListenPort:      torrentUpperPort,
 		ConnectionsPerSecond: torrentConnectionsPerSecond,
