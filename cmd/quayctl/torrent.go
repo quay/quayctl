@@ -14,20 +14,34 @@ import (
 	"github.com/coreos-inc/testpull/dockerdist"
 )
 
+var torrentFingerprint bittorrent.ClientFingerprint
 var torrentFolder string
-var torrentPort int
-var seedDuration time.Duration
+var torrentLowerPort int
+var torrentUpperPort int
+var torrentConnectionsPerSecond int
+var torrentMaxDowloadRate int
+var torrentMaxUploadRate int
+var torrentSeedDuration time.Duration
+var torrentEncryptionMode int
+var torrentDebug bool
 var insecureFlag bool
 
 func init() {
 	torrentCommand.AddCommand(torrentPullCommand)
-	torrentCommand.PersistentFlags().IntVar(&torrentPort, "port", 0, "Port that listens for peer connections")
+	torrentCommand.PersistentFlags().IntVar(&torrentLowerPort, "lower-port", 6881, "Lower port that listens for peer connections")
+	torrentCommand.PersistentFlags().IntVar(&torrentUpperPort, "upper-port", 6889, "Upper port that listens for peer connections")
+	torrentCommand.PersistentFlags().IntVar(&torrentConnectionsPerSecond, "connections-per-second", 200, "Number of connection attempts that are made per second")
+	torrentCommand.PersistentFlags().IntVar(&torrentMaxDowloadRate, "download-rate", 0, "Maximum download rate in kB/s. 0 means unlimited.")
+	torrentCommand.PersistentFlags().IntVar(&torrentMaxUploadRate, "upload-rate", 0, "Maximum upload rate in kB/s. 0 means unlimited.")
+	torrentCommand.PersistentFlags().IntVar(&torrentEncryptionMode, "encryption-mode", int(bittorrent.FORCED), "Encryption mode for connections. 0 means that only encrypted connections are allowed, 1 that encryption is preferred but not enforced and 2 that encrytion is disabled.")
+	torrentCommand.PersistentFlags().BoolVar(&torrentDebug, "debug", false, "BitTorrent protocol verbosity")
 	torrentCommand.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "If specified, HTTP is used in place of HTTPS to talk to the registry")
 
 	torrentCommand.AddCommand(torrentSeedCommand)
-	torrentSeedCommand.Flags().DurationVar(&seedDuration, "duration", 10*time.Minute, "Duration of the seeding")
+	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 10*time.Minute, "Duration of the seeding")
 
 	torrentFolder = os.TempDir() + "/quayctl/torrents"
+	torrentFingerprint = bittorrent.ClientFingerprint{"QU", 0, 1, 0, 0}
 }
 
 var torrentCommand = &cobra.Command{
@@ -69,38 +83,34 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 
 	var torrents = make([]torrentInfo, 0)
 	for _, layer := range manifest.FSLayers {
-		torrentUrl := url.URL{
+		torrentURL := url.URL{
 			Scheme: "https",
 			Host:   named.Hostname(),
 			Path:   fmt.Sprintf("/c1/torrent/%s/blobs/%s", named.RemoteName(), layer.BlobSum.String()),
 		}
 
 		if insecureFlag {
-			torrentUrl.Scheme = "http"
+			torrentURL.Scheme = "http"
 		}
 
 		if credentials.Username != "" {
-			torrentUrl.User = url.UserPassword(credentials.Username, credentials.Password)
+			torrentURL.User = url.UserPassword(credentials.Username, credentials.Password)
 		}
 
 		if _, found := blobSet[layer.BlobSum.String()]; found {
 			continue
 		}
 
-		torrents = append(torrents, torrentInfo{layer.BlobSum.String(), torrentUrl.String()})
+		torrents = append(torrents, torrentInfo{layer.BlobSum.String(), torrentURL.String()})
 		blobSet[layer.BlobSum.String()] = struct{}{}
 	}
 
-	// TODO(jzelinskie): Mute logs because Taipei-Torrent is super-verbose.
-	// log.SetFlags(0)
-	// log.SetOutput(ioutil.Discard)
-
 	// Initialize Bittorrent client.
-	bt := initBitTorrentClient(torrentPort)
-	defer bt.Shutdown()
+	bt := initBitTorrentClient()
+	defer bt.Stop()
 
 	// Download every layers in parallel.
-	results := parallelTorrents(bt, torrents, 0)
+	results := parallelTorrents(bt, torrents, nil)
 	log.Printf("All layers downloaded; calling docker load")
 
 	// Build a synthetic tar in docker-load format and load it into Docker.
@@ -123,23 +133,41 @@ func torrentSeedRun(cmd *cobra.Command, args []string) {
 		log.Fatal("failed to specify one image to be seeded")
 	}
 	image := args[0]
-	// TODO: this
+
+	// TODO(jschorr): implement this
+
+	// Initialize Bittorrent client.
+	// bt := initBitTorrentClient()
+	// defer bt.Stop()
+
+	// Seed every layers in parallel.
+	// parallelTorrents(bt, torrents, torrentSeedDuration)
+
 	log.Println("successfully seeded image:", image)
 }
 
-func initBitTorrentClient(port int) *bittorrent.Client {
+func initBitTorrentClient() *bittorrent.Client {
 	// Ensure destination folder exists.
 	if err := os.MkdirAll(torrentFolder, 0755); err != nil {
 		log.Fatal(err)
 	}
 
-	bt, err := bittorrent.NewClient(port, torrentFolder)
-	if err != nil {
+	// Create client.
+	bt := bittorrent.NewClient(bittorrent.ClientConfig{
+		Fingerprint:          torrentFingerprint,
+		LowerListenPort:      torrentLowerPort,
+		UpperListenPort:      torrentUpperPort,
+		ConnectionsPerSecond: torrentConnectionsPerSecond,
+		MaxDownloadRate:      torrentMaxDowloadRate * 1024,
+		MaxUploadRate:        torrentMaxUploadRate * 1024,
+		Encryption:           bittorrent.EncryptionMode(torrentEncryptionMode),
+		Debug:                torrentDebug,
+	})
+
+	// Start client.
+	if err := bt.Start(); err != nil {
 		log.Fatal(err)
 	}
-
-	go bt.Run()
-	time.Sleep(100 * time.Millisecond)
 
 	return bt
 }
@@ -149,21 +177,21 @@ type torrentInfo struct {
 	torrentPath string
 }
 
-func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuration time.Duration) map[string]string {
+func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuration *time.Duration) map[string]string {
 	ch := make(chan torrentInfo)
 
 	for _, torrent := range torrents {
 		go func(torrent torrentInfo) {
 			// Download and wait for download to finish.
 			log.Printf("Downloading %s\n", torrent.torrentPath)
-			path, keepSeeding, err := bt.Download(torrent.torrentPath, seedDuration)
+			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, seedDuration)
 			if err != nil {
 				log.Fatal(err)
 			}
-			log.Printf("Finished downloading %s\n", torrent.torrentPath)
+			log.Printf("Finished downloading %s to %s\n", torrent.torrentPath, path)
 
 			// Wait for seed to finish.
-			if seedDuration > 0 {
+			if seedDuration != nil {
 				log.Printf("Seeding %s for %v\n", torrent.torrentPath, seedDuration)
 				<-keepSeeding
 				log.Printf("Stopped seeding %v\n", torrent.torrentPath)
@@ -176,12 +204,9 @@ func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuratio
 
 	// Wait for every torrent to finish.
 	results := map[string]string{}
-
 	for range torrents {
-		select {
-		case path := <-ch:
-			results[path.key] = path.torrentPath
-		}
+		path := <-ch
+		results[path.key] = path.torrentPath
 	}
 
 	return results
