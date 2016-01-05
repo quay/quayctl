@@ -45,17 +45,21 @@ type torrent struct {
 }
 
 // ClientFingerprint represents information about a client and its version.
-// It is used to encode this information into the client's peer id.
+// It is encoded into the client's peer id.
 type ClientFingerprint struct {
 	// ID represents uniquely a client. It must contains exactly two characters.
 	// Unofficial list: https://wiki.theory.org/BitTorrentSpecification#peer_id
 	ID string
+
 	// Major represents the major version of the client. It must be within the range [0, 9].
 	Major int
+
 	// Minor represents the minor version of the client. It must be within the range [0, 9].
 	Minor int
+
 	// Revision represents the revision of the client. It must be within the range [0, 9].
 	Revision int
+
 	// Tag represents the version tag of the client. It must be within the range [0, 9].
 	Tag int
 }
@@ -74,7 +78,7 @@ type ClientConfig struct {
 	UpperListenPort int
 
 	// ConnectionsPerSecond specifies the maximum number of outgoing connections per second
-	// libtorrent does.
+	// libtorrent allows.
 	ConnectionsPerSecond int
 
 	// MaxDownloadRate defines the maximun bandwidth (in bytes/s) that libtorrent will use to download
@@ -301,12 +305,13 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 	if errCode.Value() != 0 {
 		return "", nil, fmt.Errorf("Unable to start torrent: error code %v, %v", errCode.Value(), errCode.Message())
 	}
-	bt.torrents[sourcePath] = &torrent{handle: handle, isFinished: make(chan struct{})}
+	torrent := &torrent{handle: handle, isFinished: make(chan struct{})}
+	bt.torrents[sourcePath] = torrent
 
 	bt.torrentsLock.Unlock()
 
 	// Wait for the download to finish.
-	<-bt.torrents[sourcePath].isFinished
+	<-torrent.isFinished
 	path := path.Clean(downloadPath + "/" + handle.Torrent_file().Name())
 
 	// Seed for the specified duration.
