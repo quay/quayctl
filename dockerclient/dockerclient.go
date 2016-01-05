@@ -11,15 +11,20 @@ import (
 	"github.com/fsouza/go-dockerclient"
 )
 
-// DockerClient is an interface for all of the Docker™ interactions required of
-// a worker.
-type dockerClient interface {
-	BuildImage(docker.BuildImageOptions) error
-	PullImage(docker.PullImageOptions, docker.AuthConfiguration) error
-	PushImage(docker.PushImageOptions, docker.AuthConfiguration) error
-	TagImage(string, docker.TagImageOptions) error
-	InspectImage(string) (*docker.Image, error)
-	RemoveImage(string) error
+// HasImage returns true if the current Docker daemon reports that the image with the given
+// ID exists.
+func HasImage(imageId string) (bool, error) {
+	client, err := newDockerClient()
+	if err != nil {
+		return false, err
+	}
+
+	found, err := client.InspectImage(imageId)
+	if err != nil {
+		return false, err
+	}
+
+	return found.ID == imageId, nil
 }
 
 func newDockerClient() (*docker.Client, error) {

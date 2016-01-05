@@ -16,8 +16,10 @@ import (
 	"github.com/fsouza/go-dockerclient"
 )
 
-// DockerLoad performs a `docker load` of the given image with its manifest and layerPaths.
-func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string) error {
+// DockerLoadLayer performs a `docker load` of a single layer found at the given index in the
+// manifest. Note that calling this method is sensitive to the dependent layers being already loaded
+// in Docker, otherwise it will fail.
+func DockerLoadLayer(image reference.Named, manifest *schema1.SignedManifest, layerIndex int, layerPath string) error {
 	client, err := newDockerClient()
 	if err != nil {
 		return fmt.Errorf("Could not connect to Docker: %v", err)
@@ -26,7 +28,7 @@ func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPa
 	buf := new(bytes.Buffer)
 	opts := docker.LoadImageOptions{buf}
 
-	terr := buildDockerLoadTar(image, manifest, layerPaths, buf)
+	terr := buildDockerLoadLayerTar(image, manifest, layerIndex, layerPath, buf)
 	if terr != nil {
 		return fmt.Errorf("Could not perform docker-load: %v", terr)
 	}
@@ -39,9 +41,23 @@ func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPa
 	return nil
 }
 
-// buildDockerLoadTar builds a TAR in the format of `docker load` V1, writing it to the specified
-// writer.
-func buildDockerLoadTar(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string, w io.Writer) error {
+type V1LayerInfo struct {
+	ID string `json:"id"`
+}
+
+// GetLayerInfo returns the parsed V1 layer information for the given layer.
+func GetLayerInfo(layerHistory schema1.History) V1LayerInfo {
+	layerInfo := V1LayerInfo{}
+	err := json.Unmarshal([]byte(layerHistory.V1Compatibility), &layerInfo)
+	if err != nil {
+		log.Fatalf("Could not unmarshal V1 compatibility information")
+	}
+
+	return layerInfo
+}
+
+// buildDockerLoadLayerTar builds a TAR in the format of `docker load` V1 for a single layer.
+func buildDockerLoadLayerTar(image reference.Named, manifest *schema1.SignedManifest, layerIndex int, layerPath string, w io.Writer) error {
 	// Docker import V1 Format (.tar):
 	//  VERSION - The docker import version: '1.0'
 	//  repositories - JSON file containing a repo -> tag -> image map
@@ -61,56 +77,42 @@ func buildDockerLoadTar(image reference.Named, manifest *schema1.SignedManifest,
 	//      "latest": "finallayerid"
 	//   }
 	// }
-	topLayerId := getLayerInfo(manifest.History[0]).ID
-	tagMap := map[string]string{}
-	tagMap[manifest.Tag] = topLayerId
-
 	repositoriesMap := map[string]interface{}{}
-	repositoriesMap[image.Hostname()+"/"+image.RemoteName()] = tagMap
+
+	// Note: We only write the tagged information for the top layer.
+	if layerIndex == 0 {
+		topLayerId := GetLayerInfo(manifest.History[0]).ID
+		tagMap := map[string]string{}
+		tagMap[manifest.Tag] = topLayerId
+		repositoriesMap[image.Hostname()+"/"+image.RemoteName()] = tagMap
+	}
 
 	jsonString, _ := json.Marshal(repositoriesMap)
 	writeTarFile(tw, "repositories", []byte(jsonString))
 
-	// For each layer in the manifest, write a folder containing its JSON information, as well
-	// as its layer TAR.
-	for index, layer := range manifest.FSLayers {
-		layerInfo := getLayerInfo(manifest.History[index])
+	// Write a folder containing its JSON information, as well as its layer TAR.
+	layerInfo := GetLayerInfo(manifest.History[layerIndex])
 
-		// {someLayerId}/json
-		writeTarFile(tw, fmt.Sprintf("%s/json", layerInfo.ID), []byte(manifest.History[index].V1Compatibility))
+	// {someLayerId}/json
+	writeTarFile(tw, fmt.Sprintf("%s/json", layerInfo.ID), []byte(manifest.History[layerIndex].V1Compatibility))
 
-		// {someLayerId}/layer.tar
-		layerFile, err := os.Open(layerPaths[layer.BlobSum.String()])
-		if err != nil {
-			return err
-		}
-
-		layerStat, err := layerFile.Stat()
-		if err != nil {
-			return err
-		}
-
-		writeTarHeader(tw, fmt.Sprintf("%s/layer.tar", layerInfo.ID), layerStat.Size())
-		io.Copy(tw, layerFile)
-		layerFile.Close()
+	// {someLayerId}/layer.tar
+	layerFile, err := os.Open(layerPath)
+	if err != nil {
+		return err
 	}
+
+	layerStat, err := layerFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	writeTarHeader(tw, fmt.Sprintf("%s/layer.tar", layerInfo.ID), layerStat.Size())
+	io.Copy(tw, layerFile)
+	layerFile.Close()
 
 	// Close writing to the TAR.
 	return tw.Close()
-}
-
-type v1LayerInfo struct {
-	ID string `json:"id"`
-}
-
-func getLayerInfo(layerHistory schema1.History) v1LayerInfo {
-	layerInfo := v1LayerInfo{}
-	err := json.Unmarshal([]byte(layerHistory.V1Compatibility), &layerInfo)
-	if err != nil {
-		log.Fatalf("Could not unmarshal V1 compatibility information")
-	}
-
-	return layerInfo
 }
 
 func writeTarHeader(tw *tar.Writer, filename string, filesize int64) {
