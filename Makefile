@@ -62,6 +62,7 @@ force:
 build-envs:
 	$(GO) get -d $(LIBTORRENT_GO)
 	$(MAKE) -C $(LIBTORRENT_GO_HOME) PLATFORMS=$(PLATFORMS) build-envs
+	$(MAKE) -C $(LIBTORRENT_GO_HOME) PLATFORMS=$(PLATFORMS) alldist
 
 $(BUILD_PATH):
 	mkdir -p $(BUILD_PATH)
