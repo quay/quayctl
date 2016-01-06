@@ -21,7 +21,7 @@
 		},
 		{
 			"ImportPath": "github.com/dmartinpro/libtorrent-go",
-			"Rev": "41f7c2518c441fc10975e759aff292ec4fe39927"
+			"Rev": "701964d117d6a4c02fc24d483f85869ca5b96727"
 		},
 		{
 			"ImportPath": "github.com/docker/distribution",
@@ -234,7 +234,8 @@
 		},
 		{
 			"ImportPath": "github.com/fsouza/go-dockerclient",
-			"Rev": "83211b6fbbfc6aa4a19eeb76eaf5cbfbe1381004"
+			"Comment": "0.2.1-549-g7b927cb",
+			"Rev": "7b927cb79baf026dd14d1c507033c33e5cf74eed"
 		},
 		{
 			"ImportPath": "github.com/gorilla/context",
@@ -269,6 +270,10 @@
 		{
 			"ImportPath": "github.com/spf13/pflag",
 			"Rev": "08b1a584251b5b62f458943640fc8ebd4d50aaa5"
+		},
+		{
+			"ImportPath": "github.com/streamrail/concurrent-map",
+			"Rev": "d9fcb63c5922e9219f204bbe9b141f238074805e"
 		},
 		{
 			"ImportPath": "github.com/vbatts/tar-split/archive/tar",

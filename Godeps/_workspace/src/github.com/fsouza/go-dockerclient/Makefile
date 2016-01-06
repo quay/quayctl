@@ -7,54 +7,46 @@
 	fmtcheck \
 	pretest \
 	test \
-	integration \
 	cov \
 	clean
-
-SRCS = $(shell git ls-files '*.go' | grep -v '^external/')
-PKGS = ./. ./testing
 
 all: test
 
 vendor:
-	@ go get -v github.com/mjibson/party
-	party -d external -c -u
+	go get -v github.com/mjibson/party
+	party -d vendor -c -u
 
 lint:
-	@ go get -v github.com/golang/lint/golint
-	$(foreach file,$(SRCS),golint $(file) || exit;)
+	go get -v github.com/golang/lint/golint
+	for file in $(shell git ls-files '*.go' | grep -v '^vendor/'); do \
+		golint $$file; \
+	done
 
 vet:
-	@-go get -v golang.org/x/tools/cmd/vet
-	$(foreach pkg,$(PKGS),go vet $(pkg);)
+	@ go get -v golang.org/x/tools/cmd/vet
+	go vet ./...
 
 fmt:
-	gofmt -w $(SRCS)
+	gofmt -w $(shell git ls-files '*.go' | grep -v '^vendor/')
 
 fmtcheck:
-	$(foreach file,$(SRCS),gofmt -d $(file);)
-
-prepare_docker:
-	sudo stop docker
-	sudo rm -rf /var/lib/docker
-	sudo rm -f `which docker`
-	sudo apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
-	echo "deb https://apt.dockerproject.org/repo ubuntu-trusty main" | sudo tee /etc/apt/sources.list.d/docker.list
-	sudo apt-get update
-	sudo apt-get install docker-engine=$(DOCKER_VERSION)-0~$(shell lsb_release -cs) -y --force-yes
+	for file in $(shell git ls-files '*.go' | grep -v '^vendor/'); do \
+		gofmt $$file | diff -u $$file -; \
+		if [ -n "$$(gofmt $$file | diff -u $$file -)" ]; then\
+			exit 1; \
+		fi; \
+	done
 
 pretest: lint vet fmtcheck
 
 test: pretest
-	$(foreach pkg,$(PKGS),go test $(pkg) || exit;)
-
-integration:
-	go test -tags docker_integration -run TestIntegration -v
+	go test
+	go test ./testing
 
 cov:
-	@ go get -v github.com/axw/gocov/gocov
-	@ go get golang.org/x/tools/cmd/cover
+	go get -v github.com/axw/gocov/gocov
+	go get golang.org/x/tools/cmd/cover
 	gocov test | gocov report
 
 clean:
-	$(foreach pkg,$(PKGS),go clean $(pkg) || exit;)
+	go clean ./...
