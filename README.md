@@ -31,4 +31,9 @@ By default, it will build for the following platforms:
 - linux-x64
 - linux-arm
 
-It is possible to build against a subset of these targets by defining the `PLATFORMS` env variable.
+It is possible to build against a subset of these targets by defining the `PLATFORMS` variable, for instance:
+
+```
+make PLATFORMS=darwin-x64 libtorrent-go
+make PLATFORMS=darwin-x64 alldist
+```
