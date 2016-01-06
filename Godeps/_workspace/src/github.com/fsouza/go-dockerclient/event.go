@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,7 +82,10 @@ func (c *Client) RemoveEventListener(listener chan *APIEvents) error {
 		return err
 	}
 	if len(c.eventMonitor.listeners) == 0 {
-		c.eventMonitor.disableEventMonitoring()
+		err = c.eventMonitor.disableEventMonitoring()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -114,6 +118,8 @@ func (eventState *eventMonitoringState) removeListener(listener chan<- *APIEvent
 }
 
 func (eventState *eventMonitoringState) closeListeners() {
+	eventState.Lock()
+	defer eventState.Unlock()
 	for _, l := range eventState.listeners {
 		close(l)
 		eventState.Add(-1)
@@ -145,13 +151,9 @@ func (eventState *eventMonitoringState) enableEventMonitoring(c *Client) error {
 }
 
 func (eventState *eventMonitoringState) disableEventMonitoring() error {
+	eventState.Wait()
 	eventState.Lock()
 	defer eventState.Unlock()
-
-	eventState.closeListeners()
-
-	eventState.Wait()
-
 	if eventState.enabled {
 		eventState.enabled = false
 		close(eventState.C)
@@ -166,9 +168,7 @@ func (eventState *eventMonitoringState) monitorEvents(c *Client) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if err = eventState.connectWithRetry(c); err != nil {
-		// terminate if connect failed
-		eventState.disableEventMonitoring()
-		return
+		eventState.terminate()
 	}
 	for eventState.isEnabled() {
 		timeout := time.After(100 * time.Millisecond)
@@ -178,14 +178,15 @@ func (eventState *eventMonitoringState) monitorEvents(c *Client) {
 				return
 			}
 			if ev == EOFEvent {
-				eventState.disableEventMonitoring()
+				eventState.closeListeners()
+				eventState.terminate()
 				return
 			}
 			eventState.updateLastSeen(ev)
 			go eventState.sendEvent(ev)
 		case err = <-eventState.errC:
 			if err == ErrNoListeners {
-				eventState.disableEventMonitoring()
+				eventState.terminate()
 				return
 			} else if err != nil {
 				defer func() { go eventState.monitorEvents(c) }()
@@ -225,7 +226,7 @@ func (eventState *eventMonitoringState) sendEvent(event *APIEvents) {
 	defer eventState.RUnlock()
 	eventState.Add(1)
 	defer eventState.Done()
-	if eventState.enabled {
+	if eventState.isEnabled() {
 		if len(eventState.listeners) == 0 {
 			eventState.errC <- ErrNoListeners
 			return
@@ -245,6 +246,10 @@ func (eventState *eventMonitoringState) updateLastSeen(e *APIEvents) {
 	}
 }
 
+func (eventState *eventMonitoringState) terminate() {
+	eventState.disableEventMonitoring()
+}
+
 func (c *Client) eventHijack(startTime int64, eventChan chan *APIEvents, errChan chan error) error {
 	uri := "/events"
 	if startTime != 0 {
@@ -259,9 +264,9 @@ func (c *Client) eventHijack(startTime int64, eventChan chan *APIEvents, errChan
 	var dial net.Conn
 	var err error
 	if c.TLSConfig == nil {
-		dial, err = c.Dialer.Dial(protocol, address)
+		dial, err = net.Dial(protocol, address)
 	} else {
-		dial, err = tlsDialWithDialer(c.Dialer, protocol, address, c.TLSConfig)
+		dial, err = tls.Dial(protocol, address, c.TLSConfig)
 	}
 	if err != nil {
 		return err

@@ -7,86 +7,105 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/docker/distribution/manifest/schema1"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/reference"
+	"github.com/streamrail/concurrent-map"
 
 	"github.com/coreos-inc/testpull/bittorrent"
 	"github.com/coreos-inc/testpull/dockerclient"
 	"github.com/coreos-inc/testpull/dockerdist"
 )
 
-var torrentFingerprint bittorrent.ClientFingerprint
-var torrentFolder string
-var torrentLowerPort int
-var torrentUpperPort int
-var torrentConnectionsPerSecond int
-var torrentMaxDowloadRate int
-var torrentMaxUploadRate int
-var torrentSeedDuration time.Duration
-var torrentEncryptionMode int
-var torrentDebug bool
-var insecureFlag bool
+// torrentSeedOption defines the option for whether to seed after a layer has been downloaded
+// via torrent.
+type torrentSeedOption int
 
-func init() {
-	torrentCommand.AddCommand(torrentPullCommand)
-	torrentCommand.PersistentFlags().IntVar(&torrentLowerPort, "lower-port", 6881, "Lower port that listens for peer connections")
-	torrentCommand.PersistentFlags().IntVar(&torrentUpperPort, "upper-port", 6889, "Upper port that listens for peer connections")
-	torrentCommand.PersistentFlags().IntVar(&torrentConnectionsPerSecond, "connections-per-second", 200, "Number of connection attempts that are made per second")
-	torrentCommand.PersistentFlags().IntVar(&torrentMaxDowloadRate, "download-rate", 0, "Maximum download rate in kB/s. 0 means unlimited.")
-	torrentCommand.PersistentFlags().IntVar(&torrentMaxUploadRate, "upload-rate", 0, "Maximum upload rate in kB/s. 0 means unlimited.")
-	torrentCommand.PersistentFlags().IntVar(&torrentEncryptionMode, "encryption-mode", int(bittorrent.FORCED), "Encryption mode for connections. 0 means that only encrypted connections are allowed, 1 that encryption is preferred but not enforced and 2 that encrytion is disabled.")
-	torrentCommand.PersistentFlags().BoolVar(&torrentDebug, "debug", false, "BitTorrent protocol verbosity")
-	torrentCommand.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "If specified, HTTP is used in place of HTTPS to talk to the registry")
+const (
+	torrentNoSeed torrentSeedOption = iota
+	torrentSeedAfterPull
+)
 
-	torrentCommand.AddCommand(torrentSeedCommand)
-	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 10*time.Minute, "Duration of the seeding")
+// dockerLoadOption defines the option for whether to perform docker-load of a downloaded layer.
+type dockerLoadOption int
 
-	torrentFolder = os.TempDir() + "/quayctl/torrents"
-	torrentFingerprint = bittorrent.ClientFingerprint{"QU", 0, 1, 0, 0}
+const (
+	dockerSkipLoad dockerLoadOption = iota
+	dockerPerformLoad
+)
+
+// dockerLayersOption defines the option for whether to check for the existance of layers in
+// Docker and to skip those found.
+type dockerLayersOption int
+
+const (
+	dockerSkipExistingLayers dockerLayersOption = iota
+	dockerAllLayers
+)
+
+// torrentInfo holds the blobSum and torrent path for a torrent.
+type torrentInfo struct {
+	blobSum     string
+	torrentPath string
 }
 
-var torrentCommand = &cobra.Command{
-	Use:   "torrent",
-	Short: "interact with Quay via BitTorrent",
-	Run:   torrentAction,
+// layerInfo holds information about a Docker layer in an image.
+type layerInfo struct {
+	info       dockerclient.V1LayerInfo
+	layer      schema1.History
+	index      int
+	parentInfo *dockerclient.V1LayerInfo
 }
 
-func torrentAction(cmd *cobra.Command, args []string) {
-	cmd.Usage()
-	os.Exit(1)
-}
+func buildLayerInfo(layers []schema1.History) []layerInfo {
+	info := make([]layerInfo, len(layers))
+	for index, layer := range layers {
+		parentIndex := index + 1
+		var parentInfo *dockerclient.V1LayerInfo = nil
 
-var torrentPullCommand = &cobra.Command{
-	Use:   "pull",
-	Short: "pull a container image",
-	Run:   torrentPullRun,
-}
+		if parentIndex < len(layers) {
+			parentInfoStruct := dockerclient.GetLayerInfo(layers[parentIndex])
+			parentInfo = &parentInfoStruct
+		}
 
-func torrentPullRun(cmd *cobra.Command, args []string) {
-	if len(args) != 1 {
-		log.Fatal("failed to specify one image to be pulled")
+		info[index] = layerInfo{dockerclient.GetLayerInfo(layer), layer, index, parentInfo}
 	}
-	image := args[0]
+	return info
+}
 
-	// Download the image manifest.
-	named, manifest, err := dockerdist.DownloadManifest(image, insecureFlag)
-	if err != nil {
-		log.Fatalf("Could not download image: %v", err)
+// requiredLayersAndBlobs returns the list of required layers and blobs that we need to download.
+func requiredLayersAndBlobs(manifest *schema1.SignedManifest, option dockerLayersOption) ([]layerInfo, []schema1.FSLayer) {
+	if option == dockerAllLayers {
+		return buildLayerInfo(manifest.History), manifest.FSLayers
 	}
 
-	log.Printf("Got manifest for image; Downloading torrents.")
+	// Check each layer for its existance in Docker.
+	var blobsToDownload = make([]schema1.FSLayer, 0)
+	for index, layer := range manifest.History {
+		layerInfo := dockerclient.GetLayerInfo(layer)
+		found, _ := dockerclient.HasImage(layerInfo.ID)
+		if found {
+			return buildLayerInfo(manifest.History[0:index]), blobsToDownload
+		}
 
-	// Retrieve the credentials (if any) for the current image.
-	credentials, _ := dockerdist.GetAuthCredentials(image)
+		blobsToDownload = append(blobsToDownload, manifest.FSLayers[index])
+	}
 
-	// Build the list of torrent URLs, one per file system later.
+	return buildLayerInfo(manifest.History), manifest.FSLayers
+}
+
+// buildTorrentInfo builds the slice of torrentInfo structs representing each blob sum to be
+// downloaded, along with its torrent URL.
+func buildTorrentInfo(named reference.Named, blobs []schema1.FSLayer, credentials types.AuthConfig) []torrentInfo {
 	blobSet := map[string]struct{}{}
 
 	var torrents = make([]torrentInfo, 0)
-	for _, layer := range manifest.FSLayers {
+	for _, blob := range blobs {
+		blobSum := blob.BlobSum.String()
 		torrentURL := url.URL{
 			Scheme: "https",
 			Host:   named.Hostname(),
-			Path:   fmt.Sprintf("/c1/torrent/%s/blobs/%s", named.RemoteName(), layer.BlobSum.String()),
+			Path:   fmt.Sprintf("/c1/torrent/%s/blobs/%s", named.RemoteName(), blobSum),
 		}
 
 		if insecureFlag {
@@ -97,59 +116,144 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 			torrentURL.User = url.UserPassword(credentials.Username, credentials.Password)
 		}
 
-		if _, found := blobSet[layer.BlobSum.String()]; found {
+		if _, found := blobSet[blobSum]; found {
 			continue
 		}
 
-		torrents = append(torrents, torrentInfo{layer.BlobSum.String(), torrentURL.String()})
-		blobSet[layer.BlobSum.String()] = struct{}{}
+		torrents = append(torrents, torrentInfo{blobSum, torrentURL.String()})
+		blobSet[blobSum] = struct{}{}
 	}
 
+	return torrents
+}
+
+// torrentImage performs a torrent download of a Docker image, with specified options for loading,
+// cache checking and seeding.
+func torrentImage(image string, loadOption dockerLoadOption, layersOption dockerLayersOption, seedOption torrentSeedOption) error {
+	// Retrieve the credentials (if any) for the current image.
+	credentials, _ := dockerdist.GetAuthCredentials(image)
+
+	// Retrieve the manifest for the image.
+	named, manifest, err := dockerdist.DownloadManifest(image, insecureFlag)
+	if err != nil {
+		return fmt.Errorf("Could not download image manifest: %v", err)
+	}
+
+	log.Printf("Downloaded manifest for image %v", image)
+
+	// Build the lists of layers and blobs that we need to download.
+	layers, blobs := requiredLayersAndBlobs(manifest, layersOption)
+	if layersOption == dockerSkipExistingLayers && len(layers) == 0 && seedOption == torrentNoSeed {
+		log.Printf("All layers already downloaded")
+		return nil
+	}
+
+	// Build the list of torrent URLs, one per file system layer needed for download.
+	torrents := buildTorrentInfo(named, blobs, credentials)
+
 	// Initialize Bittorrent client.
-	bt := initBitTorrentClient()
+	bt, err := initBitTorrentClient()
+	if err != nil {
+		return fmt.Errorf("Could not initialize torrent client: %v", err)
+	}
+
 	defer bt.Stop()
 
-	// Download every layers in parallel.
-	results := parallelTorrents(bt, torrents, nil)
-	log.Printf("All layers downloaded; calling docker load")
+	// Add a channel for each layer and blob to conduct post-processing.
+	layerCompletedChannels := map[string]chan struct{}{}
+	blobDownloadedChannels := map[string]chan struct{}{}
+	blobCompletedChannels := map[string]chan struct{}{}
+	blobPaths := cmap.New()
 
-	// Build a synthetic tar in docker-load format and load it into Docker.
-	lerr := dockerclient.DockerLoad(named, manifest, results)
-	if lerr != nil {
-		log.Fatalf("%v", lerr)
+	// Create the blob channels.
+	for _, torrent := range torrents {
+		blobDownloadedChannels[torrent.blobSum] = make(chan struct{})
+		blobCompletedChannels[torrent.blobSum] = make(chan struct{})
 	}
 
-	log.Println("Successfully imported image: ", image)
-}
-
-var torrentSeedCommand = &cobra.Command{
-	Use:   "seed",
-	Short: "upload a container image indefinitely",
-	Run:   torrentSeedRun,
-}
-
-func torrentSeedRun(cmd *cobra.Command, args []string) {
-	if len(args) != 1 {
-		log.Fatal("failed to specify one image to be seeded")
+	// Create the layer channels.
+	for _, layer := range layers {
+		layerCompletedChannels[layer.info.ID] = make(chan struct{})
 	}
-	image := args[0]
 
-	// TODO(jschorr): implement this
+	// Start goroutines to conduct the layer work.
+	if loadOption == dockerPerformLoad {
+		for _, layer := range layers {
+			go func(layer layerInfo) {
+				// Wait on the layer's blob to be downloaded.
+				blobSum := manifest.FSLayers[layer.index].BlobSum.String()
+				<-blobDownloadedChannels[blobSum]
 
-	// Initialize Bittorrent client.
-	// bt := initBitTorrentClient()
-	// defer bt.Stop()
+				// Wait on the layer's parent (if any) to be loaded.
+				if layer.parentInfo != nil {
+					<-layerCompletedChannels[layer.parentInfo.ID]
+				}
 
-	// Seed every layers in parallel.
-	// parallelTorrents(bt, torrents, torrentSeedDuration)
+				// Call docker-load on the layer.
+				log.Printf("Loading layer %v into Docker", layer.info.ID)
+				layerPath, _ := blobPaths.Get(blobSum)
+				err := dockerclient.DockerLoadLayer(named, manifest, layer.index, layerPath.(string))
+				if err != nil {
+					log.Fatal(err)
+				}
 
-	log.Println("successfully seeded image:", image)
+				// Mark the layer as completed.
+				close(layerCompletedChannels[layer.info.ID])
+			}(layer)
+		}
+	}
+
+	// For each torrent, download the layers in parallel, call post-processing and (optionally)
+	// seed.
+	var localSeedDuration *time.Duration = nil
+	if seedOption == torrentSeedAfterPull {
+		localSeedDuration = &torrentSeedDuration
+	}
+
+	for _, torrent := range torrents {
+		go func(torrent torrentInfo) {
+			log.Printf("Starting download of layer %v", torrent.blobSum)
+			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, localSeedDuration)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			log.Printf("Finished downloading %s\n", torrent.blobSum)
+			blobPaths.Set(torrent.blobSum, path)
+
+			// Mark the download as complete.
+			close(blobDownloadedChannels[torrent.blobSum])
+
+			// Wait for seed to finish.
+			if localSeedDuration != nil {
+				log.Printf("Seeding %s for %v\n", torrent.blobSum, localSeedDuration)
+				<-keepSeeding
+				log.Printf("Stopped seeding %v\n", torrent.blobSum)
+			}
+
+			// Signal success.
+			close(blobCompletedChannels[torrent.blobSum])
+		}(torrent)
+	}
+
+	// Wait for every torrent and every layer to finish.
+	for _, torrent := range torrents {
+		<-blobCompletedChannels[torrent.blobSum]
+	}
+
+	if loadOption == dockerPerformLoad {
+		for _, layer := range layers {
+			<-layerCompletedChannels[layer.info.ID]
+		}
+	}
+
+	return nil
 }
 
-func initBitTorrentClient() *bittorrent.Client {
+func initBitTorrentClient() (*bittorrent.Client, error) {
 	// Ensure destination folder exists.
 	if err := os.MkdirAll(torrentFolder, 0755); err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	// Create client.
@@ -166,48 +270,8 @@ func initBitTorrentClient() *bittorrent.Client {
 
 	// Start client.
 	if err := bt.Start(); err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	return bt
-}
-
-type torrentInfo struct {
-	key         string
-	torrentPath string
-}
-
-func parallelTorrents(bt *bittorrent.Client, torrents []torrentInfo, seedDuration *time.Duration) map[string]string {
-	ch := make(chan torrentInfo)
-
-	for _, torrent := range torrents {
-		go func(torrent torrentInfo) {
-			// Download and wait for download to finish.
-			log.Printf("Downloading %s\n", torrent.torrentPath)
-			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, seedDuration)
-			if err != nil {
-				log.Fatal(err)
-			}
-			log.Printf("Finished downloading %s to %s\n", torrent.torrentPath, path)
-
-			// Wait for seed to finish.
-			if seedDuration != nil {
-				log.Printf("Seeding %s for %v\n", torrent.torrentPath, seedDuration)
-				<-keepSeeding
-				log.Printf("Stopped seeding %v\n", torrent.torrentPath)
-			}
-
-			// Signal success.
-			ch <- torrentInfo{torrent.key, path}
-		}(torrent)
-	}
-
-	// Wait for every torrent to finish.
-	results := map[string]string{}
-	for range torrents {
-		path := <-ch
-		results[path.key] = path.torrentPath
-	}
-
-	return results
+	return bt, nil
 }
