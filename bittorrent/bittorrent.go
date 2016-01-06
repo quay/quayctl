@@ -44,6 +44,81 @@ type torrent struct {
 	isFinished chan struct{}
 }
 
+// Status contains several pieces of information about the status of a torrent.
+type Status struct {
+	// Name is the torrent's name.
+	Name string
+
+	// Status represents the current torrent's state.
+	Status TorrentState
+
+	// Progress is download completion percentage.
+	Progress float32
+
+	// DownloadRate is the total download rates for all peers for this torrent, expressed in kB/s.
+	DownloadRate float32
+
+	// UploadRate is the total upload rates for all peers for this torrent, expressed in kB/s.
+	UploadRate float32
+
+	// NumConnectCandidates is the number of peers in this torrent's peer list that is a candidate
+	// to be connected to. i.e. It has fewer connect attempts than the max fail count, it is not a
+	// seed if we are a seed, it is not banned etc.
+	// If this is 0, it means we don't know of any more peers that we can try.
+	NumConnectCandidates int
+
+	// NumPeeers is the total number of peer connections this session has. This includes incoming
+	// connections that still hasn't sent their handshake or outgoing connections that still hasn't
+	// completed the TCP connection.
+	NumPeers int
+
+	// NumSeeds is the number of peers that are seeding that this client is currently connected to.
+	NumSeeds int
+}
+
+// TorrentState represents a torrent's current task.
+type TorrentState string
+
+const (
+	// QueuedForChecking means that the torrent is in the queue for being checked. But there currently
+	// is another torrent that are being checked. This torrent will wait for its turn.
+	QueuedForChecking TorrentState = "Queued for checking"
+
+	// CheckingFiles means that the torrent has not started its download yet, and is currently
+	// checking existing files.
+	CheckingFiles = "Checking files"
+
+	// DownloadingMetadata means that the torrent is trying to download metadata from peers.
+	DownloadingMetadata = "Downloading metadata"
+
+	// Downloading means that the torrent is being downloaded. This is the state most torrents will be
+	// in most of the time.
+	Downloading = "Downloading"
+
+	// Finished means that the torrent has finished downloading but still doesn't have the entire torrent.
+	// i.e. some pieces are filtered and won't get downloaded.
+	// As this library doesn't allow filtering, the state is transient.
+	Finished = "Finished"
+
+	// Seeding means that torrent has finished downloading and is a pure seeder.
+	Seeding = "Seeding"
+
+	// Allocating means that if the torrent was started in full allocation mode, this indicates
+	// that the (disk) storage for the torrent is allocated.
+	// As this library only uses the default allocation mode (sparse allocation), this state should
+	// never appear.
+	Allocating = "Allocating"
+
+	// CheckingResumeData means that the torrent is currently checking the fastresume data and
+	// comparing it to the files on disk. This is typically completed in a fraction of a second,
+	// but if you add a large number of torrents at once, they will queue up.
+	CheckingResumeData = "Checking resume data"
+
+	// Unknown probably means that we couldn't get the current state information or that libtorrent
+	// introduced a new state that we don't recognize yet.
+	Unknown = "Unknown"
+)
+
 // ClientFingerprint represents information about a client and its version.
 // It is encoded into the client's peer id.
 type ClientFingerprint struct {
@@ -330,6 +405,55 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 	}
 
 	return path, keepSeedingChan, nil
+}
+
+// GetStatus queries and returns several informations about the specified torrent.
+// The torrent must be currently downloading or seed, an error will be thrown otherwise.
+func (bt *Client) GetStatus(sourcePath string) (Status, error) {
+	var s Status
+
+	bt.torrentsLock.Lock()
+	defer bt.torrentsLock.Unlock()
+
+	torrent, found := bt.torrents[sourcePath]
+	if !found {
+		return s, errors.New("torrent not found")
+	}
+	status := torrent.handle.Status(uint(0))
+
+	s.Name = torrent.handle.Torrent_file().Name()
+	s.Status = parseTorrentState(status.GetState())
+	s.Progress = status.GetProgress() * 100
+	s.DownloadRate = float32(status.GetDownload_rate()) / 1024
+	s.UploadRate = float32(status.GetUpload_rate()) / 1024
+	s.NumConnectCandidates = status.GetConnect_candidates()
+	s.NumPeers = status.GetNum_peers()
+	s.NumSeeds = status.GetNum_seeds()
+
+	return s, nil
+}
+
+func parseTorrentState(state libtorrent.LibtorrentTorrent_statusState_t) TorrentState {
+	switch state {
+	case libtorrent.Torrent_statusQueued_for_checking:
+		return QueuedForChecking
+	case libtorrent.Torrent_statusChecking_files:
+		return CheckingFiles
+	case libtorrent.Torrent_statusDownloading_metadata:
+		return DownloadingMetadata
+	case libtorrent.Torrent_statusDownloading:
+		return Downloading
+	case libtorrent.Torrent_statusFinished:
+		return Finished
+	case libtorrent.Torrent_statusSeeding:
+		return Seeding
+	case libtorrent.Torrent_statusAllocating:
+		return Allocating
+	case libtorrent.Torrent_statusChecking_resume_data:
+		return CheckingResumeData
+	default:
+		return Unknown
+	}
 }
 
 func (bt *Client) deleteTorrent(sourcePath string, keepSeedingChan chan struct{}) {
