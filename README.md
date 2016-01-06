@@ -12,6 +12,7 @@ make alldist
 By default, it will build for the following platforms:
 - darwin-x64
 - windows-x86
+- windows-x64
 - linux-x86
 - linux-x64
 - linux-arm

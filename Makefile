@@ -3,7 +3,7 @@ NAME = testpull
 PKG = "github.com/coreos-inc/testpull/cmd/quayctl"
 
 # Platforms on which we want to build the project.
-PLATFORMS = darwin-x64 windows-x86 linux-x86 linux-x64 linux-arm
+PLATFORMS = darwin-x64 linux-x86 linux-x64 linux-arm windows-x86 windows-x64
 
 # Additional tags and LDFLAGS to use during the compilation.
 GO_BUILD_TAGS = netgo std
