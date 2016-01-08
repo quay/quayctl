@@ -15,6 +15,10 @@
 			"Rev": "446d1c146faa8ed3f4218f056fcd165f6bcfda81"
 		},
 		{
+			"ImportPath": "github.com/cheggaaa/pb",
+			"Rev": "cc46b02092687616f236433896b16192d3e71835"
+		},
+		{
 			"ImportPath": "github.com/cpuguy83/go-md2man/md2man",
 			"Comment": "v1.0.4",
 			"Rev": "71acacd42f85e5e82f70a55327789582a5200a90"
@@ -233,6 +237,10 @@
 			"Rev": "9cbd2a1374f46905c68a4eb3694a130610adc62a"
 		},
 		{
+			"ImportPath": "github.com/dustin/go-humanize",
+			"Rev": "8929fe90cee4b2cb9deb468b51fb34eba64d1bf0"
+		},
+		{
 			"ImportPath": "github.com/fsouza/go-dockerclient",
 			"Comment": "0.2.1-549-g7b927cb",
 			"Rev": "7b927cb79baf026dd14d1c507033c33e5cf74eed"
@@ -248,6 +256,10 @@
 		{
 			"ImportPath": "github.com/inconshreveable/mousetrap",
 			"Rev": "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75"
+		},
+		{
+			"ImportPath": "github.com/olekukonko/ts",
+			"Rev": "ecf753e7c962639ab5a1fb46f7da627d4c0a04b8"
 		},
 		{
 			"ImportPath": "github.com/opencontainers/runc/libcontainer/user",
