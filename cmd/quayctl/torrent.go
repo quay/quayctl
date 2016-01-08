@@ -7,9 +7,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/cheggaaa/pb"
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/reference"
+	"github.com/dustin/go-humanize"
 	"github.com/streamrail/concurrent-map"
 
 	"github.com/coreos-inc/testpull/bittorrent"
@@ -176,6 +178,20 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 		layerCompletedChannels[layer.info.ID] = make(chan struct{})
 	}
 
+	// Create a progress bar for each of the blobs.
+	pbMap := map[string]*pb.ProgressBar{}
+	var bars = make([]*pb.ProgressBar, 0)
+	for _, torrent := range torrents {
+		progressBar := pb.New(100).Prefix(torrent.blobSum + ": ").Postfix(": Initializing")
+		pbMap[torrent.blobSum] = progressBar
+		bars = append(bars, progressBar)
+	}
+
+	pool, err := pb.StartPool(bars...)
+	if err != nil {
+		panic(err)
+	}
+
 	// Start goroutines to conduct the layer work.
 	if loadOption == dockerPerformLoad {
 		for _, layer := range layers {
@@ -190,7 +206,6 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 				}
 
 				// Call docker-load on the layer.
-				log.Printf("Loading layer %v into Docker", layer.info.ID)
 				layerPath, _ := blobPaths.Get(blobSum)
 				err := dockerclient.DockerLoadLayer(named, manifest, layer.index, layerPath.(string))
 				if err != nil {
@@ -212,13 +227,34 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 
 	for _, torrent := range torrents {
 		go func(torrent torrentInfo) {
-			log.Printf("Starting download of layer %v", torrent.blobSum)
+			// Add a goroutine to update the progessbar for the torrent.
+			go func(torrent torrentInfo) {
+				progressBar := pbMap[torrent.blobSum]
+
+				for {
+					select {
+					case <-blobCompletedChannels[torrent.blobSum]:
+						progressBar.Postfix(": Complete").Set(100)
+						return
+
+					case <-time.After(250 * time.Millisecond):
+						status, err := bt.GetStatus(torrent.torrentPath)
+						if err == nil {
+							progressBar.Set(int(status.Progress))
+							progressBar.Postfix(fmt.Sprintf(": %s %v/s ▼ %v/s ▲", status.Status, humanize.Bytes(uint64(status.DownloadRate*1024)), humanize.Bytes(uint64(status.UploadRate*1024))))
+						}
+
+						break
+					}
+				}
+			}(torrent)
+
+			// Start downloading the torrent.
 			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, localSeedDuration)
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			log.Printf("Finished downloading %s\n", torrent.blobSum)
 			blobPaths.Set(torrent.blobSum, path)
 
 			// Mark the download as complete.
@@ -226,9 +262,7 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 
 			// Wait for seed to finish.
 			if localSeedDuration != nil {
-				log.Printf("Seeding %s for %v\n", torrent.blobSum, localSeedDuration)
 				<-keepSeeding
-				log.Printf("Stopped seeding %v\n", torrent.blobSum)
 			}
 
 			// Signal success.
@@ -241,8 +275,11 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 		<-blobCompletedChannels[torrent.blobSum]
 	}
 
+	pool.Stop()
+
 	if loadOption == dockerPerformLoad {
 		for _, layer := range layers {
+			log.Println("Importing layer", layer.info.ID)
 			<-layerCompletedChannels[layer.info.ID]
 		}
 	}
