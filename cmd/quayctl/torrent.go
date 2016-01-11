@@ -183,6 +183,8 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 	var bars = make([]*pb.ProgressBar, 0)
 	for _, torrent := range torrents {
 		progressBar := pb.New(100).Prefix(torrent.blobSum + ": ").Postfix(": Initializing")
+		progressBar.AlwaysUpdate = true
+
 		pbMap[torrent.blobSum] = progressBar
 		bars = append(bars, progressBar)
 	}
