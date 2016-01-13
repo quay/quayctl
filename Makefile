@@ -1,5 +1,5 @@
 # Name of the project.
-NAME = testpull
+NAME = quayctl
 PKG = "github.com/coreos-inc/testpull/cmd/quayctl"
 
 # Platforms on which we want to build the project.
