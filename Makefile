@@ -99,7 +99,7 @@ upx: $(BUILD_PATH)/$(OUTPUT_NAME) force
 	curl -L http://sourceforge.net/projects/upx/files/upx/3.91/upx-3.91-amd64_linux.tar.bz2/download | tar xj && \
   cp upx-3.91-amd64_linux/upx /usr/bin/upx && \
   rm -rf upx-3.91-amd64_linux && \
-	find $(BUILD_PATH) -type f ! -name "*.exe" -a ! -name "*.so" -a ! -name "*.sha" -exec $(UPX) --lzma {} \;
+	find $(BUILD_PATH) -type f -name $(NAME) -exec $(UPX) --lzma {} \;
 
 checksum: $(BUILD_PATH)/$(OUTPUT_NAME) force
 	shasum -b $(BUILD_PATH)/$(OUTPUT_NAME) | cut -d' ' -f1 > $(BUILD_PATH)/$(OUTPUT_NAME).sha
