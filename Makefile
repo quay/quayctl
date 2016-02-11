@@ -1,6 +1,6 @@
 # Name of the project.
 NAME = quayctl
-PKG = "github.com/coreos-inc/testpull/cmd/quayctl"
+PKG = "github.com/coreos-inc/quayctl/cmd/quayctl"
 
 # Platforms on which we want to build the project.
 PLATFORMS = darwin-x64 linux-x86 linux-x64 linux-arm windows-x86 windows-x64
