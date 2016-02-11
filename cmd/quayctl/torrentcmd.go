@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreos-inc/testpull/bittorrent"
+	"github.com/coreos-inc/quayctl/bittorrent"
 )
 
 var torrentFingerprint bittorrent.ClientFingerprint

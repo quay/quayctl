@@ -14,9 +14,9 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/streamrail/concurrent-map"
 
-	"github.com/coreos-inc/testpull/bittorrent"
-	"github.com/coreos-inc/testpull/dockerclient"
-	"github.com/coreos-inc/testpull/dockerdist"
+	"github.com/coreos-inc/quayctl/bittorrent"
+	"github.com/coreos-inc/quayctl/dockerclient"
+	"github.com/coreos-inc/quayctl/dockerdist"
 )
 
 // torrentSeedOption defines the option for whether to seed after a layer has been downloaded
