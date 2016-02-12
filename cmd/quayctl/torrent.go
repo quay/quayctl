@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/cheggaaa/pb"
@@ -153,14 +155,6 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 	// Build the list of torrent URLs, one per file system layer needed for download.
 	torrents := buildTorrentInfo(named, blobs, credentials)
 
-	// Initialize Bittorrent client.
-	bt, err := initBitTorrentClient()
-	if err != nil {
-		return fmt.Errorf("Could not initialize torrent client: %v", err)
-	}
-
-	defer bt.Stop()
-
 	// Add a channel for each layer and blob to conduct post-processing.
 	layerCompletedChannels := map[string]chan struct{}{}
 	blobDownloadedChannels := map[string]chan struct{}{}
@@ -189,10 +183,20 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 		bars = append(bars, progressBar)
 	}
 
+	// Create a pool of progress bars.
 	pool, err := pb.StartPool(bars...)
 	if err != nil {
 		panic(err)
 	}
+
+	// Initialize Bittorrent client.
+	bt, err := initBitTorrentClient()
+	if err != nil {
+		return fmt.Errorf("Could not initialize torrent client: %v", err)
+	}
+	defer bt.Stop()
+
+	go catchShutdownSignals(bt, pool)
 
 	// Start goroutines to conduct the layer work.
 	if loadOption == dockerPerformLoad {
@@ -313,4 +317,16 @@ func initBitTorrentClient() (*bittorrent.Client, error) {
 	}
 
 	return bt, nil
+}
+
+func catchShutdownSignals(btClient *bittorrent.Client, progressBars *pb.Pool) {
+	shutdown := make(chan os.Signal)
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	<-shutdown
+
+	progressBars.Stop()
+	btClient.Stop()
+
+	log.Println("Received signal and cleanly shutdown.")
+	os.Exit(0)
 }
