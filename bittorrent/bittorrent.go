@@ -347,10 +347,23 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 		}
 		defer os.Remove(f.Name())
 
-		resp, err := http.Get(torrentPath)
+		client := http.DefaultClient
+		request, err := http.NewRequest("GET", torrentPath, nil)
+		if err != nil {
+			return "", nil, err
+		}
+
+		request.Header.Add("Accept", "application/x-bittorrent")
+
+		resp, err := client.Do(request)
 		if err != nil {
 			return "", nil, fmt.Errorf("Unable to start torrent: could not download .torrent file.")
 		}
+
+		if resp.StatusCode/100 >= 4 {
+			return "", nil, fmt.Errorf("Unable to start torrent: got %v for .torrent file", resp.StatusCode)
+		}
+
 		defer resp.Body.Close()
 
 		io.Copy(f, resp.Body)

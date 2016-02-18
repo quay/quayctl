@@ -49,8 +49,9 @@ const (
 
 // torrentInfo holds the blobSum and torrent path for a torrent.
 type torrentInfo struct {
-	blobSum     string
+	id          string
 	torrentPath string
+	title       string
 }
 
 // layerInfo holds information about a Docker layer in an image.
@@ -98,9 +99,9 @@ func requiredLayersAndBlobs(manifest *schema1.SignedManifest, option dockerLayer
 	return buildLayerInfo(manifest.History), manifest.FSLayers
 }
 
-// buildTorrentInfo builds the slice of torrentInfo structs representing each blob sum to be
+// buildTorrentInfoForBlob builds the slice of torrentInfo structs representing each blob sum to be
 // downloaded, along with its torrent URL.
-func buildTorrentInfo(named reference.Named, blobs []schema1.FSLayer, credentials types.AuthConfig) []torrentInfo {
+func buildTorrentInfoForBlob(named reference.Named, blobs []schema1.FSLayer, credentials types.AuthConfig) []torrentInfo {
 	blobSet := map[string]struct{}{}
 
 	var torrents = make([]torrentInfo, 0)
@@ -124,7 +125,7 @@ func buildTorrentInfo(named reference.Named, blobs []schema1.FSLayer, credential
 			continue
 		}
 
-		torrents = append(torrents, torrentInfo{blobSum, torrentURL.String()})
+		torrents = append(torrents, torrentInfo{blobSum, torrentURL.String(), blobSum})
 		blobSet[blobSum] = struct{}{}
 	}
 
@@ -153,33 +154,144 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 	}
 
 	// Build the list of torrent URLs, one per file system layer needed for download.
-	torrents := buildTorrentInfo(named, blobs, credentials)
+	torrents := buildTorrentInfoForBlob(named, blobs, credentials)
+	downloadInfo := downloadTorrents(torrents, seedOption)
 
-	// Add a channel for each layer and blob to conduct post-processing.
+	// Start goroutines to conduct the layer loading work.
 	layerCompletedChannels := map[string]chan struct{}{}
-	blobDownloadedChannels := map[string]chan struct{}{}
-	blobCompletedChannels := map[string]chan struct{}{}
-	blobPaths := cmap.New()
+	if loadOption == dockerPerformLoad {
+		// Create the layer channels.
+		for _, layer := range layers {
+			layerCompletedChannels[layer.info.ID] = make(chan struct{})
+		}
 
-	// Create the blob channels.
+		for _, layer := range layers {
+			go func(layer layerInfo) {
+				// Wait on the layer's blob to be downloaded.
+				blobSum := manifest.FSLayers[layer.index].BlobSum.String()
+				<-downloadInfo.downloadedChannels[blobSum]
+
+				// Wait on the layer's parent (if any) to be loaded.
+				if layer.parentInfo != nil {
+					<-layerCompletedChannels[layer.parentInfo.ID]
+				}
+
+				// Call docker-load on the layer.
+				layerPath, _ := downloadInfo.torrentPaths.Get(blobSum)
+				err := dockerclient.DockerLoadLayer(named, manifest, layer.index, layerPath.(string))
+				if err != nil {
+					downloadInfo.pool.Stop()
+					log.Fatal(err)
+				}
+
+				// Mark the layer as completed.
+				close(layerCompletedChannels[layer.info.ID])
+			}(layer)
+		}
+	}
+
+	// Wait until all torrents are complete.
+	<-downloadInfo.completeChannel
+
+	// Ensure all layers are imported.
+	if loadOption == dockerPerformLoad {
+		for _, layer := range layers {
+			log.Println("Importing layer", layer.info.ID)
+			<-layerCompletedChannels[layer.info.ID]
+		}
+	}
+
+	return nil
+}
+
+// torrentSquashedImage performs a torrent download of a squashed Docker image, with specified
+// options for loading and seeding.
+func torrentSquashedImage(image string, loadOption dockerLoadOption, seedOption torrentSeedOption) error {
+	// Retrieve the credentials (if any) for the current image.
+	credentials, _ := dockerdist.GetAuthCredentials(image)
+
+	// Parse the name of the image.
+	named, err := reference.ParseNamed(image)
+	if err != nil {
+		return err
+	}
+
+	var tagName = "latest"
+	if tagged, ok := named.(reference.NamedTagged); ok {
+		tagName = tagged.Tag()
+	}
+
+	// Build the URL for the squashed image.
+	squashedURL := url.URL{
+		Scheme: "https",
+		Host:   named.Hostname(),
+		Path:   fmt.Sprintf("/c1/squash/%s/%s", named.RemoteName(), tagName),
+	}
+
+	if insecureFlag {
+		squashedURL.Scheme = "http"
+	}
+
+	if credentials.Username != "" {
+		squashedURL.User = url.UserPassword(credentials.Username, credentials.Password)
+	}
+
+	torrent := torrentInfo{
+		id:          "squashed",
+		torrentPath: squashedURL.String(),
+		title:       fmt.Sprintf("%s/%s:%s.squash", named.Hostname(), named.RemoteName(), tagName),
+	}
+
+	// Start the download of the torrent.
+	downloadInfo := downloadTorrents([]torrentInfo{torrent}, seedOption)
+
+	// Wait for the torrent to complete.
+	<-downloadInfo.completeChannel
+
+	// Call docker-load on the squashed image.
+	path, _ := downloadInfo.torrentPaths.Get("squashed")
+	squashedFile, err := os.Open(path.(string))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer squashedFile.Close()
+
+	log.Println("Importing squashed image")
+	return dockerclient.DockerLoadTar(squashedFile)
+}
+
+// downloadTorrentInfo contains data structures populated and signaled by the downloadTorrents
+// method.
+type downloadTorrentInfo struct {
+	downloadedChannels map[string]chan struct{} // Map of torrent ID -> channel to await download
+	completeChannel    chan struct{}            // Channel to await completion of all torrent ops
+	pool               *pb.Pool                 // ProgressBar pool
+	torrentPaths       cmap.ConcurrentMap       // Map from torrent ID -> downloaded path
+}
+
+// downloadTorrents starts the downloads of all the specified torrents, with optional seeding once
+// completed. Returns immediately with a downloadTorrentInfo struct.
+func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) downloadTorrentInfo {
+	// Add a channel for each torrent to track state.
+	torrentDownloadedChannels := map[string]chan struct{}{}
+	torrentCompletedChannels := map[string]chan struct{}{}
+	torrentPaths := cmap.New()
+
+	// Create the torrent channels.
 	for _, torrent := range torrents {
-		blobDownloadedChannels[torrent.blobSum] = make(chan struct{})
-		blobCompletedChannels[torrent.blobSum] = make(chan struct{})
+		torrentDownloadedChannels[torrent.id] = make(chan struct{})
+		torrentCompletedChannels[torrent.id] = make(chan struct{})
 	}
 
-	// Create the layer channels.
-	for _, layer := range layers {
-		layerCompletedChannels[layer.info.ID] = make(chan struct{})
-	}
-
-	// Create a progress bar for each of the blobs.
+	// Create a progress bar for each of the torrents.
 	pbMap := map[string]*pb.ProgressBar{}
 	var bars = make([]*pb.ProgressBar, 0)
 	for _, torrent := range torrents {
-		progressBar := pb.New(100).Prefix(torrent.blobSum + ": ").Postfix(": Initializing")
+		progressBar := pb.New(100).Prefix(torrent.title + ": ").Postfix(": Initializing")
 		progressBar.AlwaysUpdate = true
 
-		pbMap[torrent.blobSum] = progressBar
+		pbMap[torrent.id] = progressBar
 		bars = append(bars, progressBar)
 	}
 
@@ -192,39 +304,13 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 	// Initialize Bittorrent client.
 	bt, err := initBitTorrentClient()
 	if err != nil {
-		return fmt.Errorf("Could not initialize torrent client: %v", err)
+		panic(fmt.Errorf("Could not initialize torrent client: %v", err))
 	}
-	defer bt.Stop()
 
+	// Listen for Ctrl-C.
 	go catchShutdownSignals(bt, pool)
 
-	// Start goroutines to conduct the layer work.
-	if loadOption == dockerPerformLoad {
-		for _, layer := range layers {
-			go func(layer layerInfo) {
-				// Wait on the layer's blob to be downloaded.
-				blobSum := manifest.FSLayers[layer.index].BlobSum.String()
-				<-blobDownloadedChannels[blobSum]
-
-				// Wait on the layer's parent (if any) to be loaded.
-				if layer.parentInfo != nil {
-					<-layerCompletedChannels[layer.parentInfo.ID]
-				}
-
-				// Call docker-load on the layer.
-				layerPath, _ := blobPaths.Get(blobSum)
-				err := dockerclient.DockerLoadLayer(named, manifest, layer.index, layerPath.(string))
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				// Mark the layer as completed.
-				close(layerCompletedChannels[layer.info.ID])
-			}(layer)
-		}
-	}
-
-	// For each torrent, download the layers in parallel, call post-processing and (optionally)
+	// For each torrent, download the ddata in parallel, call post-processing and (optionally)
 	// seed.
 	var localSeedDuration *time.Duration = nil
 	if seedOption == torrentSeedAfterPull {
@@ -235,11 +321,11 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 		go func(torrent torrentInfo) {
 			// Add a goroutine to update the progessbar for the torrent.
 			go func(torrent torrentInfo) {
-				progressBar := pbMap[torrent.blobSum]
+				progressBar := pbMap[torrent.id]
 
 				for {
 					select {
-					case <-blobCompletedChannels[torrent.blobSum]:
+					case <-torrentCompletedChannels[torrent.id]:
 						progressBar.Postfix(": Complete").Set(100)
 						return
 
@@ -249,8 +335,6 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 							progressBar.Set(int(status.Progress))
 							progressBar.Postfix(fmt.Sprintf(": %s %v/s ▼ %v/s ▲", status.Status, humanize.Bytes(uint64(status.DownloadRate*1024)), humanize.Bytes(uint64(status.UploadRate*1024))))
 						}
-
-						break
 					}
 				}
 			}(torrent)
@@ -258,13 +342,14 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 			// Start downloading the torrent.
 			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, localSeedDuration)
 			if err != nil {
+				pool.Stop()
 				log.Fatal(err)
 			}
 
-			blobPaths.Set(torrent.blobSum, path)
+			torrentPaths.Set(torrent.id, path)
 
 			// Mark the download as complete.
-			close(blobDownloadedChannels[torrent.blobSum])
+			close(torrentDownloadedChannels[torrent.id])
 
 			// Wait for seed to finish.
 			if localSeedDuration != nil {
@@ -272,27 +357,29 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 			}
 
 			// Signal success.
-			close(blobCompletedChannels[torrent.blobSum])
+			close(torrentCompletedChannels[torrent.id])
 		}(torrent)
 	}
 
-	// Wait for every torrent and every layer to finish.
-	for _, torrent := range torrents {
-		<-blobCompletedChannels[torrent.blobSum]
-	}
+	// Create the completed channel.
+	completed := make(chan struct{})
 
-	pool.Stop()
-
-	if loadOption == dockerPerformLoad {
-		for _, layer := range layers {
-			log.Println("Importing layer", layer.info.ID)
-			<-layerCompletedChannels[layer.info.ID]
+	// Start a goroutine to wait for all torrents to complete.
+	go func() {
+		// Wait for every torrent to finish.
+		for _, torrent := range torrents {
+			<-torrentCompletedChannels[torrent.id]
 		}
-	}
 
-	return nil
+		pool.Stop()
+		bt.Stop()
+		close(completed)
+	}()
+
+	return downloadTorrentInfo{torrentDownloadedChannels, completed, pool, torrentPaths}
 }
 
+// initBitTorrentClient inityializes a bittorrent client.
 func initBitTorrentClient() (*bittorrent.Client, error) {
 	// Ensure destination folder exists.
 	if err := os.MkdirAll(torrentFolder, 0755); err != nil {

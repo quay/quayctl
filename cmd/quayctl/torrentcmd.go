@@ -21,6 +21,7 @@ var torrentSeedDuration time.Duration
 var torrentEncryptionMode int
 var torrentDebug bool
 var insecureFlag bool
+var squashedFlag bool
 
 func init() {
 	torrentCommand.AddCommand(torrentPullCommand)
@@ -32,6 +33,7 @@ func init() {
 	torrentCommand.PersistentFlags().IntVar(&torrentEncryptionMode, "encryption-mode", int(bittorrent.FORCED), "Encryption mode for connections. 0 means that only encrypted connections are allowed, 1 that encryption is preferred but not enforced and 2 that encrytion is disabled.")
 	torrentCommand.PersistentFlags().BoolVar(&torrentDebug, "debug", false, "BitTorrent protocol verbosity")
 	torrentCommand.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "If specified, HTTP is used in place of HTTPS to talk to the registry")
+	torrentCommand.PersistentFlags().BoolVar(&squashedFlag, "squashed", false, "If specified, the squashed version of the image will be pulled")
 
 	torrentCommand.AddCommand(torrentSeedCommand)
 	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 0, "Duration of the seeding. If not specified, will seed forever.")
@@ -69,12 +71,22 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	}
 
 	image := args[0]
-	err := torrentImage(image, dockerPerformLoad, dockerSkipExistingLayers, torrentNoSeed)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	log.Printf("Successfully pulled image %v", image)
+	if squashedFlag {
+		err := torrentSquashedImage(image, dockerPerformLoad, torrentNoSeed)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		log.Printf("Successfully pulled squashed image %v", image)
+	} else {
+		err := torrentImage(image, dockerPerformLoad, dockerSkipExistingLayers, torrentNoSeed)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		log.Printf("Successfully pulled image %v", image)
+	}
 }
 
 func torrentSeedRun(cmd *cobra.Command, args []string) {
@@ -83,8 +95,16 @@ func torrentSeedRun(cmd *cobra.Command, args []string) {
 	}
 
 	image := args[0]
-	err := torrentImage(image, dockerSkipLoad, dockerAllLayers, torrentSeedAfterPull)
-	if err != nil {
-		log.Fatal(err)
+
+	if squashedFlag {
+		err := torrentSquashedImage(image, dockerSkipLoad, torrentSeedAfterPull)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		err := torrentImage(image, dockerSkipLoad, dockerAllLayers, torrentSeedAfterPull)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 }
