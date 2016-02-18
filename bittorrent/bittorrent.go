@@ -326,14 +326,14 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 		return "", nil, errors.New("Use Start() before Download()")
 	}
 
-	bt.torrentsLock.Lock()
-
 	// Verify that the torrent is unique first, otherwise we'll have trouble detecting the finished
 	// state.
+	bt.torrentsLock.Lock()
 	if _, found := bt.torrents[sourcePath]; found {
 		bt.torrentsLock.Unlock()
 		return "", nil, errors.New("This torrent is already being downloaded.")
 	}
+	bt.torrentsLock.Unlock()
 
 	// Download .torrent file.
 	//
@@ -389,13 +389,20 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 	errCode := libtorrent.NewError_code()
 	defer libtorrent.DeleteError_code(errCode)
 
+	bt.torrentsLock.Lock()
+	if _, found := bt.torrents[sourcePath]; found {
+		bt.torrentsLock.Unlock()
+		return "", nil, errors.New("This torrent is already being downloaded.")
+	}
+
 	handle := bt.session.Add_torrent(torrentParams)
 	if errCode.Value() != 0 {
+		bt.torrentsLock.Unlock()
 		return "", nil, fmt.Errorf("Unable to start torrent: error code %v, %v", errCode.Value(), errCode.Message())
 	}
+
 	torrent := &torrent{handle: handle, isFinished: make(chan struct{})}
 	bt.torrents[sourcePath] = torrent
-
 	bt.torrentsLock.Unlock()
 
 	// Wait for the download to finish.

@@ -195,7 +195,8 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 
 	// Ensure all layers are imported.
 	if loadOption == dockerPerformLoad {
-		for _, layer := range layers {
+		for index, _ := range layers {
+			layer := layers[len(layers)-index-1]
 			log.Println("Importing layer", layer.info.ID)
 			<-layerCompletedChannels[layer.info.ID]
 		}
@@ -310,35 +311,42 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 	// Listen for Ctrl-C.
 	go catchShutdownSignals(bt, pool)
 
-	// For each torrent, download the ddata in parallel, call post-processing and (optionally)
+	// For each torrent, download the data in parallel, call post-processing and (optionally)
 	// seed.
 	var localSeedDuration *time.Duration = nil
 	if seedOption == torrentSeedAfterPull {
 		localSeedDuration = &torrentSeedDuration
 	}
 
-	for _, torrent := range torrents {
-		go func(torrent torrentInfo) {
-			// Add a goroutine to update the progessbar for the torrent.
-			go func(torrent torrentInfo) {
-				progressBar := pbMap[torrent.id]
+	// Start a goroutine to query the torrent system for its status. Since libtorrent is single
+	// threaded via cgo, we need this to be done in a central source.
+	// Add a goroutine to update the progessbar for the torrent.
 
-				for {
-					select {
-					case <-torrentCompletedChannels[torrent.id]:
-						progressBar.Postfix(": Complete").Set(100)
-						return
+	// Create the completed channel.
+	completed := make(chan struct{})
 
-					case <-time.After(250 * time.Millisecond):
-						status, err := bt.GetStatus(torrent.torrentPath)
-						if err == nil {
-							progressBar.Set(int(status.Progress))
-							progressBar.Postfix(fmt.Sprintf(": %s %v/s ▼ %v/s ▲", status.Status, humanize.Bytes(uint64(status.DownloadRate*1024)), humanize.Bytes(uint64(status.UploadRate*1024))))
-						}
+	go func() {
+		for {
+			select {
+			case <-completed:
+				return
+
+			case <-time.After(250 * time.Millisecond):
+				for _, torrent := range torrents {
+					progressBar := pbMap[torrent.id]
+					status, err := bt.GetStatus(torrent.torrentPath)
+					if err == nil {
+						progressBar.Set(int(status.Progress))
+						progressBar.Postfix(fmt.Sprintf(": %s %v/s ▼ %v/s ▲", status.Status, humanize.Bytes(uint64(status.DownloadRate*1024)), humanize.Bytes(uint64(status.UploadRate*1024))))
 					}
 				}
-			}(torrent)
+			}
+		}
+	}()
 
+	// Start the downloads for each torrent.
+	for _, torrent := range torrents {
+		go func(torrent torrentInfo) {
 			// Start downloading the torrent.
 			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, localSeedDuration)
 			if err != nil {
@@ -350,6 +358,8 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 
 			// Mark the download as complete.
 			close(torrentDownloadedChannels[torrent.id])
+			pbMap[torrent.id].Set(100)
+			pbMap[torrent.id].Postfix(": Completed")
 
 			// Wait for seed to finish.
 			if localSeedDuration != nil {
@@ -360,9 +370,6 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 			close(torrentCompletedChannels[torrent.id])
 		}(torrent)
 	}
-
-	// Create the completed channel.
-	completed := make(chan struct{})
 
 	// Start a goroutine to wait for all torrents to complete.
 	go func() {
