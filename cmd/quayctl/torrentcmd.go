@@ -10,17 +10,20 @@ import (
 	"github.com/coreos-inc/quayctl/bittorrent"
 )
 
-var torrentFingerprint bittorrent.ClientFingerprint
-var torrentFolder string
-var torrentLowerPort int
-var torrentUpperPort int
-var torrentConnectionsPerSecond int
-var torrentMaxDowloadRate int
-var torrentMaxUploadRate int
-var torrentSeedDuration time.Duration
-var torrentEncryptionMode int
-var torrentDebug bool
-var insecureFlag bool
+var (
+	torrentFingerprint          bittorrent.ClientFingerprint
+	torrentFolder               string
+	torrentLowerPort            int
+	torrentUpperPort            int
+	torrentConnectionsPerSecond int
+	torrentMaxDowloadRate       int
+	torrentMaxUploadRate        int
+	torrentSeedDuration         time.Duration
+	torrentEncryptionMode       int
+	torrentDebug                bool
+	insecureFlag                bool
+	squashedFlag                bool
+)
 
 func init() {
 	torrentCommand.AddCommand(torrentPullCommand)
@@ -32,6 +35,7 @@ func init() {
 	torrentCommand.PersistentFlags().IntVar(&torrentEncryptionMode, "encryption-mode", int(bittorrent.FORCED), "Encryption mode for connections. 0 means that only encrypted connections are allowed, 1 that encryption is preferred but not enforced and 2 that encrytion is disabled.")
 	torrentCommand.PersistentFlags().BoolVar(&torrentDebug, "debug", false, "BitTorrent protocol verbosity")
 	torrentCommand.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "If specified, HTTP is used in place of HTTPS to talk to the registry")
+	torrentCommand.PersistentFlags().BoolVar(&squashedFlag, "squashed", false, "If specified, the squashed version of the image will be pulled")
 
 	torrentCommand.AddCommand(torrentSeedCommand)
 	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 0, "Duration of the seeding. If not specified, will seed forever.")
@@ -69,12 +73,20 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	}
 
 	image := args[0]
-	err := torrentImage(image, dockerPerformLoad, dockerSkipExistingLayers, torrentNoSeed)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	log.Printf("Successfully pulled image %v", image)
+	if squashedFlag {
+		if err := torrentSquashedImage(image, dockerPerformLoad, torrentNoSeed); err != nil {
+			log.Fatal(err)
+		}
+
+		log.Printf("Successfully pulled squashed image %v", image)
+	} else {
+		if err := torrentImage(image, dockerPerformLoad, dockerSkipExistingLayers, torrentNoSeed); err != nil {
+			log.Fatal(err)
+		}
+
+		log.Printf("Successfully pulled image %v", image)
+	}
 }
 
 func torrentSeedRun(cmd *cobra.Command, args []string) {
@@ -83,8 +95,14 @@ func torrentSeedRun(cmd *cobra.Command, args []string) {
 	}
 
 	image := args[0]
-	err := torrentImage(image, dockerSkipLoad, dockerAllLayers, torrentSeedAfterPull)
-	if err != nil {
-		log.Fatal(err)
+
+	if squashedFlag {
+		if err := torrentSquashedImage(image, dockerSkipLoad, torrentSeedAfterPull); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		if err := torrentImage(image, dockerSkipLoad, dockerAllLayers, torrentSeedAfterPull); err != nil {
+			log.Fatal(err)
+		}
 	}
 }

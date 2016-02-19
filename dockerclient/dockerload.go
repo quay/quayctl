@@ -20,19 +20,23 @@ import (
 // manifest. Note that calling this method is sensitive to the dependent layers being already loaded
 // in Docker, otherwise it will fail.
 func DockerLoadLayer(image reference.Named, manifest *schema1.SignedManifest, layerIndex int, layerPath string) error {
-	client, err := newDockerClient()
-	if err != nil {
-		return fmt.Errorf("Could not connect to Docker: %v", err)
-	}
-
 	buf := new(bytes.Buffer)
-	opts := docker.LoadImageOptions{buf}
-
 	terr := buildDockerLoadLayerTar(image, manifest, layerIndex, layerPath, buf)
 	if terr != nil {
 		return fmt.Errorf("Could not perform docker-load: %v", terr)
 	}
 
+	return DockerLoadTar(buf)
+}
+
+// DockerLoadTar performs a `docker load` of a TAR containing the V1 docker load format.
+func DockerLoadTar(reader io.Reader) error {
+	client, err := newDockerClient()
+	if err != nil {
+		return fmt.Errorf("Could not connect to Docker: %v", err)
+	}
+
+	opts := docker.LoadImageOptions{reader}
 	lerr := client.LoadImage(opts)
 	if lerr != nil {
 		return fmt.Errorf("Could not perform docker-load: %v", lerr)
