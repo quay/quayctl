@@ -195,7 +195,7 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 
 	// Ensure all layers are imported.
 	if loadOption == dockerPerformLoad {
-		for index, _ := range layers {
+		for index := range layers {
 			layer := layers[len(layers)-index-1]
 			log.Println("Importing layer", layer.info.ID)
 			<-layerCompletedChannels[layer.info.ID]
@@ -289,7 +289,9 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 	pbMap := map[string]*pb.ProgressBar{}
 	var bars = make([]*pb.ProgressBar, 0)
 	for _, torrent := range torrents {
-		progressBar := pb.New(100).Prefix(torrent.title + ": ").Postfix(": Initializing")
+		progressBar := pb.New(100).Prefix(shortenName(torrent.title)).Postfix(" Initializing")
+		progressBar.SetMaxWidth(80)
+		progressBar.ShowCounters = false
 		progressBar.AlwaysUpdate = true
 
 		pbMap[torrent.id] = progressBar
@@ -337,7 +339,7 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 					status, err := bt.GetStatus(torrent.torrentPath)
 					if err == nil {
 						progressBar.Set(int(status.Progress))
-						progressBar.Postfix(fmt.Sprintf(": %s %v/s ▼ %v/s ▲", status.Status, humanize.Bytes(uint64(status.DownloadRate*1024)), humanize.Bytes(uint64(status.UploadRate*1024))))
+						progressBar.Postfix(fmt.Sprintf(" %s DL%v/s UL%v/s", status.Status, humanize.Bytes(uint64(status.DownloadRate*1024)), humanize.Bytes(uint64(status.UploadRate*1024))))
 					}
 				}
 			}
@@ -358,8 +360,11 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 
 			// Mark the download as complete.
 			close(torrentDownloadedChannels[torrent.id])
-			pbMap[torrent.id].Set(100)
-			pbMap[torrent.id].Postfix(": Completed")
+			pbMap[torrent.id].ShowBar = false
+			pbMap[torrent.id].ShowPercent = false
+			pbMap[torrent.id].ShowTimeLeft = false
+			pbMap[torrent.id].ShowSpeed = false
+			pbMap[torrent.id].Postfix("Completed").Set(100)
 
 			// Wait for seed to finish.
 			if localSeedDuration != nil {
@@ -423,4 +428,11 @@ func catchShutdownSignals(btClient *bittorrent.Client, progressBars *pb.Pool) {
 
 	log.Println("Received signal and cleanly shutdown.")
 	os.Exit(0)
+}
+
+func shortenName(name string) string {
+	if len(name) > 19 {
+		return name[:19]
+	}
+	return name
 }
