@@ -21,19 +21,33 @@ Features include:
 ### Compiling From Source
 
 To build quayctl, you need to latest stable version of [Docker], [Go 1.6] and a working [Go environment].
-
-[Docker]: https://github.com/docker/docker/releases
-[Go 1.6]: https://github.com/golang/go/releases
-[Go environment]: https://golang.org/doc/code.html
+quayctl uses [libtorrent rasterbar] via SWIG and thus requires a `Makefile` that compiles the object file for libtorrent for the target OS.
 
 ```
+$ export PLATFORM='darwin-x64'
 $ go get github.com/coreos/quayctl
 $ cd $GOPATH/github.com/coreos/quayctl
-$ export PLATFORM='all | darwin-x64 | linux-x86 | linux-x64 | linux-arm | windows-x86 | windows-x64'
 $ make $PLATFORM
 ```
 
 `make` will produce quayctl binaries in `$GOPATH/build/$PLATFORM/quayctl` and the corresponding SHA1 sums in `$GOPATHbuild/$PLATFORM/quayctl.sha`.
+
+[Docker]: https://github.com/docker/docker/releases
+[Go 1.6]: https://github.com/golang/go/releases
+[Go environment]: https://golang.org/doc/code.html
+[libtorrent rasterbar]: http://www.libtorrent.org/
+
+#### Supported Platforms
+
+| Platform    | Supported |
+|:-----------:|:---------:|
+| all         |     X     |
+| darwin-x64  |     ✓     |
+| linux-x86   |     ✓     |
+| linux-x64   |     ✓     |
+| linux-arm   |     ✓     |
+| windows-x86 |     X     |
+| windows-x64 |     X     |
 
 ## Related Links
 
