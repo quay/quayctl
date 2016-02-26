@@ -167,50 +167,35 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 	torrents := buildTorrentInfoForBlob(named, blobs, credentials)
 	downloadInfo := downloadTorrents(torrents, seedOption)
 
-	// Start goroutines to conduct the layer loading work.
-	layerCompletedChannels := map[string]chan struct{}{}
 	if loadOption == dockerPerformLoad {
-		// Create the layer channels.
+		// Wait for all layers to be downloaded.
+		blobPaths := map[string]string{}
 		for _, layer := range layers {
-			layerCompletedChannels[layer.info.ID] = make(chan struct{})
+			blobSum := v1Manifest.FSLayers[layer.index].BlobSum.String()
+			<-downloadInfo.downloadedChannels[blobSum]
+			blobPath, _ := downloadInfo.torrentPaths.Get(blobSum)
+			blobPaths[blobSum] = blobPath.(string)
 		}
 
-		for _, layer := range layers {
-			go func(layer layerInfo) {
-				// Wait on the layer's blob to be downloaded.
-				blobSum := v1Manifest.FSLayers[layer.index].BlobSum.String()
-				<-downloadInfo.downloadedChannels[blobSum]
+		if seedOption == torrentNoSeed {
+			downloadInfo.pool.Stop()
+			log.Println("Performing docker load...")
+		}
 
-				// Wait on the layer's parent (if any) to be loaded.
-				if layer.parentInfo != nil {
-					<-layerCompletedChannels[layer.parentInfo.ID]
-				}
+		// Perform the docker load.
+		lerr := dockerclient.DockerLoad(named, v1Manifest, blobPaths)
+		if lerr != nil {
+			downloadInfo.pool.Stop()
+			log.Fatalf("%v", lerr)
+		}
 
-				// Call docker-load on the layer.
-				layerPath, _ := downloadInfo.torrentPaths.Get(blobSum)
-				err := dockerclient.DockerLoadLayer(named, v1Manifest, layer.index, layerPath.(string))
-				if err != nil {
-					downloadInfo.pool.Stop()
-					log.Fatal(err)
-				}
-
-				// Mark the layer as completed.
-				close(layerCompletedChannels[layer.info.ID])
-			}(layer)
+		if seedOption == torrentNoSeed {
+			log.Println("Docker load completed")
 		}
 	}
 
 	// Wait until all torrents are complete.
 	<-downloadInfo.completeChannel
-
-	// Ensure all layers are imported.
-	if loadOption == dockerPerformLoad {
-		for index := range layers {
-			layer := layers[len(layers)-index-1]
-			log.Println("Importing layer", layer.info.ID)
-			<-layerCompletedChannels[layer.info.ID]
-		}
-	}
 
 	return nil
 }
