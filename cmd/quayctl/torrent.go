@@ -374,7 +374,7 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 			pbMap[torrent.id].ShowPercent = false
 			pbMap[torrent.id].ShowTimeLeft = false
 			pbMap[torrent.id].ShowSpeed = false
-			pbMap[torrent.id].Postfix("Completed").Set(100)
+			pbMap[torrent.id].Postfix(" Completed").Set(100)
 
 			// Wait for seed to finish.
 			if localSeedDuration != nil {
