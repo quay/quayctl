@@ -1,0 +1,96 @@
+%module libtorrent
+
+%{
+#include <libtorrent/session.hpp>
+%}
+
+%include <stl.i>
+%include <stdint.i>
+%include <typemaps.i>
+
+#ifdef SWIGWIN
+    %include <windows.i>
+#endif
+
+#define BOOST_POSIX_API
+#define BOOST_NO_TYPEID
+#define TORRENT_NO_DEPRECATE
+
+namespace std {
+    typedef int time_t;
+}
+
+namespace boost {
+    typedef ::int64_t int64_t;
+}
+
+namespace libtorrent
+{
+    typedef int64_t size_type;
+    class ptime;
+    class time_duration;
+}
+
+%rename("%(camelcase)s", %$isclass) "";
+%rename("%(camelcase)s", %$isvariable) "";
+%rename("%(camelcase)s", %$isenumitem) "";
+%rename("%(camelcase)s", %$isenum) "";
+%rename("%(camelcase)s", %$istemplate) "";
+%rename("%(camelcase)s", %$isfunction) "";
+%rename("%(camelcase)s", %$isnamespace) "";
+
+// These are problematic, ignore them for now
+%ignore libtorrent::absolutetime_nodeprecate_;
+%ignore libtorrent::throw_invalid_handle;
+%ignore libtorrent::session::add_extension;
+%ignore libtorrent::web_seed_entry;
+%ignore libtorrent::boosttime_nodeprecate_;
+%ignore libtorrent::boosttime_deprecated_;
+
+%ignore libtorrent::time_now_string;
+%ignore libtorrent::merkle_num_leafs;
+%ignore libtorrent::merkle_num_nodes;
+%ignore libtorrent::merkle_get_parent;
+%ignore libtorrent::trim_path_element;
+%ignore libtorrent::merkle_get_sibling;
+%ignore libtorrent::detail::get_symlink_path;
+%ignore libtorrent::detail::get_file_attributes;
+%ignore libtorrent::log_time;
+%ignore libtorrent::parse_int;
+
+%include <boost/preprocessor/cat.hpp>
+%include <boost/version.hpp>
+%include <boost/config/suffix.hpp>
+%include <boost/system/config.hpp>
+%include <boost/system/error_code.hpp>
+%include <boost/asio/detail/config.hpp>
+%include <boost/asio/error.hpp>
+
+%include "boost_array.i"
+
+%include <libtorrent/config.hpp>
+%include <libtorrent/export.hpp>
+%include <libtorrent/version.hpp>
+%include <libtorrent/build_config.hpp>
+%include <libtorrent/size_type.hpp>
+%include <libtorrent/error_code.hpp>
+%include <libtorrent/error.hpp>
+
+%include <libtorrent/fingerprint.hpp>
+%include "bitfield.i"
+%include "socket.i"
+%include <libtorrent/address.hpp>
+%include "torrent_info.i"
+%include <libtorrent/session_settings.hpp>
+%include "peer_info.i"
+%include "torrent_handle.i"
+%include <libtorrent/session_status.hpp>
+%include "add_torrent_params.i"
+%include "alert.i"
+%include "alert_types.i"
+%include <libtorrent/ptime.hpp>
+%include <libtorrent/time.hpp>
+%include "create_torrent.i"
+%include "dht.i"
+%include "session.i"
+%include "ed25519.i"
