@@ -23,7 +23,7 @@ Features include:
 To build quayctl, you need to latest stable version of [Docker], [Go 1.6] and a working [Go environment].
 
 [Docker]: https://github.com/docker/docker/releases
-[Go]: https://github.com/golang/go/releases
+[Go 1.6]: https://github.com/golang/go/releases
 [Go environment]: https://golang.org/doc/code.html
 
 ```
