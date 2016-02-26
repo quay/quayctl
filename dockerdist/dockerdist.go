@@ -1,18 +1,19 @@
-// dockerdist packages provides helper methods for retrieving and parsing a information from
+// Package dockerdist provides helper methods for retrieving and parsing a information from
 // a remote Docker repository.
 package dockerdist
 
 import (
 	"log"
-
-	"github.com/docker/docker/cliconfig"
+	"net/url"
 
 	distlib "github.com/docker/distribution"
+	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/manifest/schema1"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/distribution"
 	"github.com/docker/docker/reference"
 	"github.com/docker/docker/registry"
+	"github.com/docker/engine-api/types"
 	"github.com/docker/go-connections/tlsconfig"
 
 	"golang.org/x/net/context"
@@ -45,9 +46,12 @@ func getRepositoryClient(image reference.Named, insecure bool, scopes ...string)
 	metaHeaders := map[string][]string{}
 	tlsConfig := tlsconfig.ServerDefault
 
-	var url = "https://" + image.Hostname()
+	url, err := url.Parse("https://" + image.Hostname())
 	if insecure {
-		url = "http://" + image.Hostname()
+		url, err = url.Parse("http://" + image.Hostname())
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	endpoint := registry.APIEndpoint{
@@ -64,15 +68,28 @@ func getRepositoryClient(image reference.Named, insecure bool, scopes ...string)
 	return repo, err
 }
 
-// getTagOrDigest returns the tag or digest for the given image.
-func getTagOrDigest(image reference.Named) string {
-	if withTag, ok := image.(reference.NamedTagged); ok {
-		return withTag.Tag()
-	} else if withDigest, ok := image.(reference.Canonical); ok {
-		return withDigest.Digest().String()
+// getDigest returns the digest for the given image.
+func getDigest(ctx context.Context, repo distlib.Repository, image reference.Named) (digest.Digest, error) {
+	if withDigest, ok := image.(reference.Canonical); ok {
+		return withDigest.Digest(), nil
 	}
 
-	return "latest"
+	// Get TagService.
+	tagSvc := repo.Tags(ctx)
+
+	// Get Tag name.
+	tag := "latest"
+	if withTag, ok := image.(reference.NamedTagged); ok {
+		tag = withTag.Tag()
+	}
+
+	// Get Tag's Descriptor.
+	descriptor, err := tagSvc.Get(ctx, tag)
+	if err != nil {
+		return "", err
+	}
+
+	return descriptor.Digest, nil
 }
 
 // GetAuthCredentials returns the auth credentials (if any found) for the given repository, as found
@@ -95,7 +112,7 @@ func GetAuthCredentials(image string) (types.AuthConfig, error) {
 }
 
 // DownloadManifest the manifest for the given image, using the given credentials.
-func DownloadManifest(image string, insecure bool) (reference.Named, *schema1.SignedManifest, error) {
+func DownloadManifest(image string, insecure bool) (reference.Named, distlib.Manifest, error) {
 	// Parse the image name as a docker image reference.
 	named, err := reference.ParseNamed(image)
 	if err != nil {
@@ -108,23 +125,36 @@ func DownloadManifest(image string, insecure bool) (reference.Named, *schema1.Si
 		return nil, nil, err
 	}
 
+	// Get the digest.
+	ctx := context.Background()
+	digest, err := getDigest(ctx, repo, named)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Retrieve the manifest for the tag.
 	log.Printf("Downloading manifest for image %v", image)
-	ctx := context.Background()
+
 	manSvc, err := repo.Manifests(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	unverifiedManifest, err := manSvc.GetByTag(getTagOrDigest(named))
+	manifest, err := manSvc.Get(ctx, digest)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	_, verr := schema1.Verify(unverifiedManifest)
-	if verr != nil {
-		return nil, nil, verr
+	// Verify the manifest if it's signed.
+	switch manifest.(type) {
+	case *schema1.SignedManifest:
+		_, verr := schema1.Verify(manifest.(*schema1.SignedManifest))
+		if verr != nil {
+			return nil, nil, verr
+		}
+	default:
+		log.Printf("Could not verify manifest for image %v: not signed", image)
 	}
 
-	return named, unverifiedManifest, nil
+	return named, manifest, nil
 }

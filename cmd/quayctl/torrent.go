@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -11,8 +12,8 @@ import (
 
 	"github.com/cheggaaa/pb"
 	"github.com/docker/distribution/manifest/schema1"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/reference"
+	"github.com/docker/engine-api/types"
 	"github.com/dustin/go-humanize"
 	"github.com/streamrail/concurrent-map"
 
@@ -66,7 +67,7 @@ func buildLayerInfo(layers []schema1.History) []layerInfo {
 	info := make([]layerInfo, len(layers))
 	for index, layer := range layers {
 		parentIndex := index + 1
-		var parentInfo *dockerclient.V1LayerInfo = nil
+		var parentInfo *dockerclient.V1LayerInfo
 
 		if parentIndex < len(layers) {
 			parentInfoStruct := dockerclient.GetLayerInfo(layers[parentIndex])
@@ -144,10 +145,19 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 		return fmt.Errorf("Could not download image manifest: %v", err)
 	}
 
+	// Ensure that the manifest type is supported.
+	switch manifest.(type) {
+	case *schema1.SignedManifest:
+		break
+	default:
+		return errors.New("only v1 manifests are currently supported")
+	}
+	v1Manifest := manifest.(*schema1.SignedManifest)
+
 	log.Printf("Downloaded manifest for image %v", image)
 
 	// Build the lists of layers and blobs that we need to download.
-	layers, blobs := requiredLayersAndBlobs(manifest, layersOption)
+	layers, blobs := requiredLayersAndBlobs(v1Manifest, layersOption)
 	if layersOption == dockerSkipExistingLayers && len(layers) == 0 && seedOption == torrentNoSeed {
 		log.Printf("All layers already downloaded")
 		return nil
@@ -168,7 +178,7 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 		for _, layer := range layers {
 			go func(layer layerInfo) {
 				// Wait on the layer's blob to be downloaded.
-				blobSum := manifest.FSLayers[layer.index].BlobSum.String()
+				blobSum := v1Manifest.FSLayers[layer.index].BlobSum.String()
 				<-downloadInfo.downloadedChannels[blobSum]
 
 				// Wait on the layer's parent (if any) to be loaded.
@@ -178,7 +188,7 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 
 				// Call docker-load on the layer.
 				layerPath, _ := downloadInfo.torrentPaths.Get(blobSum)
-				err := dockerclient.DockerLoadLayer(named, manifest, layer.index, layerPath.(string))
+				err := dockerclient.DockerLoadLayer(named, v1Manifest, layer.index, layerPath.(string))
 				if err != nil {
 					downloadInfo.pool.Stop()
 					log.Fatal(err)
@@ -315,7 +325,7 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 
 	// For each torrent, download the data in parallel, call post-processing and (optionally)
 	// seed.
-	var localSeedDuration *time.Duration = nil
+	var localSeedDuration *time.Duration
 	if seedOption == torrentSeedAfterPull {
 		localSeedDuration = &torrentSeedDuration
 	}
