@@ -13,11 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dmartinpro/libtorrent-go"
+	"github.com/coreos/libtorrent-go"
 )
-
-// alertPollInterval defines the time in milliseconds between each libtorrent alert poll.
-const alertPollInterval = 250
 
 // Client wraps libtorrent and allows us to download torrents easily.
 type Client struct {
@@ -40,7 +37,7 @@ type Client struct {
 // torrent stores the libtorrent handle referring an active torrent and a channel that is closed
 // once the torrent's download is finished.
 type torrent struct {
-	handle     libtorrent.Torrent_handle
+	handle     libtorrent.TorrentHandle
 	isFinished chan struct{}
 }
 
@@ -80,6 +77,9 @@ type Status struct {
 type TorrentState string
 
 const (
+	// alertPollInterval defines the time in milliseconds between each libtorrent alert poll.
+	alertPollInterval = 250
+
 	// QueuedForChecking means that the torrent is in the queue for being checked. But there currently
 	// is another torrent that are being checked. This torrent will wait for its turn.
 	QueuedForChecking TorrentState = "Queued for checking"
@@ -196,59 +196,45 @@ func NewClient(config ClientConfig) *Client {
 	// Create session.
 	fingerprint := libtorrent.NewFingerprint(config.Fingerprint.ID, config.Fingerprint.Major,
 		config.Fingerprint.Minor, config.Fingerprint.Revision, config.Fingerprint.Tag)
-	sessionFlags := int(libtorrent.SessionAdd_default_plugins)
-	session := libtorrent.NewSession(fingerprint, sessionFlags)
-
-	// Load all extensions.
-	session.Add_extensions()
-
-	// Enable alerts.
-	var alertMask libtorrent.LibtorrentAlertCategory_t
-
-	// status_notification is required, it is used to determine when a torrent is finished.
-	alertMask |= libtorrent.AlertStatus_notification
-
-	// error_notification is good to have at this point because the only error management that we do
-	// is at the moment when we start to listen and add a torrent. There is not error management
-	// except that. At least, we can output the errors to the user.
-	alertMask |= libtorrent.AlertError_notification
-
-	// For debug purposes, also enable these alerts:
-	if config.Debug {
-		alertMask |= libtorrent.AlertPeer_notification
-		alertMask |= libtorrent.AlertStorage_notification
-		alertMask |= libtorrent.AlertTracker_notification
-		alertMask |= libtorrent.AlertStats_notification
-		alertMask |= libtorrent.AlertPort_mapping_notification
-		alertMask |= libtorrent.AlertError_notification
-	}
-	session.Set_alert_mask(uint(alertMask))
+	session := libtorrent.NewSession(fingerprint, int(libtorrent.SessionAddDefaultPlugins))
 
 	// Configure client.
 	// Reference: http://www.rasterbar.com/products/libtorrent/reference-Settings.html
 	settings := session.Settings()
-	settings.SetAnnounce_to_all_tiers(true)
-	settings.SetAnnounce_to_all_trackers(true)
-	settings.SetPeer_connect_timeout(2)
-	settings.SetRate_limit_ip_overhead(true)
-	settings.SetRequest_timeout(5)
-	settings.SetTorrent_connect_boost(config.ConnectionsPerSecond * 10)
-	settings.SetConnection_speed(config.ConnectionsPerSecond)
-	if config.MaxDownloadRate > 0 {
-		settings.SetDownload_rate_limit(config.MaxDownloadRate)
-	}
-	if config.MaxUploadRate > 0 {
-		settings.SetUpload_rate_limit(config.MaxUploadRate)
-	}
-	session.Set_settings(settings)
+	settings.SetAnnounceToAllTiers(true)
+	settings.SetAnnounceToAllTrackers(true)
+	settings.SetPeerConnectTimeout(2)
+	settings.SetRateLimitIpOverhead(true)
+	settings.SetRequestTimeout(5)
+	settings.SetTorrentConnectBoost(config.ConnectionsPerSecond * 10)
+	settings.SetConnectionSpeed(config.ConnectionsPerSecond)
+	settings.SetDownloadRateLimit(config.MaxDownloadRate)
+	settings.SetUploadRateLimit(config.MaxUploadRate)
+	session.SetSettings(settings)
 
 	// Configure encryption policies.
-	encryptionSettings := libtorrent.NewPe_settings()
-	encryptionSettings.SetOut_enc_policy(byte(config.Encryption))
-	encryptionSettings.SetIn_enc_policy(byte(config.Encryption))
-	encryptionSettings.SetAllowed_enc_level(byte(libtorrent.Pe_settingsBoth))
-	encryptionSettings.SetPrefer_rc4(true)
-	session.Set_pe_settings(encryptionSettings)
+	encryptionSettings := libtorrent.NewPeSettings()
+	defer libtorrent.DeletePeSettings(encryptionSettings)
+	encryptionSettings.SetOutEncPolicy(byte(config.Encryption))
+	encryptionSettings.SetInEncPolicy(byte(config.Encryption))
+	encryptionSettings.SetAllowedEncLevel(byte(libtorrent.PeSettingsBoth))
+	encryptionSettings.SetPreferRc4(true)
+	session.SetPeSettings(encryptionSettings)
+
+	// Enable alerts.
+	// - status_notification is used to determine when a torrent is finished.
+	// - error_notification is good to have at this point because the only error management that we do
+	//   is at the moment when we start to listen and add a torrent. There is not error management
+	//   except that. At least, we can output the errors to the user.
+	alertMask := libtorrent.AlertStatusNotification | libtorrent.AlertErrorNotification
+	if config.Debug {
+		alertMask = libtorrent.AlertAllCategories
+	}
+
+	session.SetAlertMask(uint(alertMask))
+
+	// Load all extensions.
+	session.AddExtensions()
 
 	return &Client{
 		session:  session,
@@ -259,22 +245,22 @@ func NewClient(config ClientConfig) *Client {
 
 // Start launches the configured Client and makes it ready to accept torrents.
 func (bt *Client) Start() error {
-	// Start services.
-	bt.session.Start_upnp()
-	bt.session.Start_natpmp()
-	bt.session.Start_lsd()
-
 	// Listen.
-	errCode := libtorrent.NewError_code()
-	defer libtorrent.DeleteError_code(errCode)
+	errCode := libtorrent.NewErrorCode()
+	defer libtorrent.DeleteErrorCode(errCode)
 
-	ports := libtorrent.NewStd_pair_int_int(bt.config.LowerListenPort, bt.config.UpperListenPort)
-	defer libtorrent.DeleteStd_pair_int_int(ports)
+	ports := libtorrent.NewStdPairIntInt(bt.config.LowerListenPort, bt.config.UpperListenPort)
+	defer libtorrent.DeleteStdPairIntInt(ports)
 
-	bt.session.Listen_on(ports, errCode)
+	bt.session.ListenOn(ports, errCode)
 	if errCode.Value() != 0 {
 		return fmt.Errorf("Unable to start the Bittorrent client: error code %v, %v", errCode.Value(), errCode.Message())
 	}
+
+	// Start services.
+	bt.session.StartUpnp()
+	bt.session.StartNatpmp()
+	bt.session.StartLsd()
 
 	bt.Running = true
 
@@ -296,9 +282,9 @@ func (bt *Client) Stop() {
 	bt.torrentsLock.Unlock()
 
 	// Stop services.
-	bt.session.Stop_lsd()
-	bt.session.Stop_upnp()
-	bt.session.Stop_natpmp()
+	bt.session.StopLsd()
+	bt.session.StopUpnp()
+	bt.session.StopNatpmp()
 
 	// Delete session.
 	libtorrent.DeleteSession(bt.session)
@@ -373,21 +359,21 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 	}
 
 	// Create torrent parameters.
-	torrentParams := libtorrent.NewAdd_torrent_params()
+	torrentParams := libtorrent.NewAddTorrentParams()
 	if strings.HasPrefix(torrentPath, "magnet:") {
 		torrentParams.SetUrl(torrentPath)
 	} else {
-		torrentInfo := libtorrent.NewTorrent_info(torrentPath)
-		torrentParams.Set_torrent_info(torrentInfo)
+		torrentInfo := libtorrent.NewTorrentInfo(torrentPath)
+		torrentParams.SetTorrentInfo(torrentInfo)
 	}
-	torrentParams.SetSave_path(downloadPath)
+	torrentParams.SetSavePath(downloadPath)
 
 	// Set flags to 0 to disable auto-management !
 	torrentParams.SetFlags(0)
 
 	// Add torrent to the Bittorrent client.
-	errCode := libtorrent.NewError_code()
-	defer libtorrent.DeleteError_code(errCode)
+	errCode := libtorrent.NewErrorCode()
+	defer libtorrent.DeleteErrorCode(errCode)
 
 	bt.torrentsLock.Lock()
 	if _, found := bt.torrents[sourcePath]; found {
@@ -395,7 +381,7 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 		return "", nil, errors.New("This torrent is already being downloaded.")
 	}
 
-	handle := bt.session.Add_torrent(torrentParams)
+	handle := bt.session.AddTorrent(torrentParams)
 	if errCode.Value() != 0 {
 		bt.torrentsLock.Unlock()
 		return "", nil, fmt.Errorf("Unable to start torrent: error code %v, %v", errCode.Value(), errCode.Message())
@@ -407,7 +393,7 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 
 	// Wait for the download to finish.
 	<-torrent.isFinished
-	path := path.Clean(downloadPath + "/" + handle.Torrent_file().Name())
+	path := path.Clean(downloadPath + "/" + handle.TorrentFile().Name())
 
 	// Seed for the specified duration.
 	keepSeedingChan := make(chan struct{})
@@ -441,35 +427,35 @@ func (bt *Client) GetStatus(sourcePath string) (Status, error) {
 	}
 	status := torrent.handle.Status(uint(0))
 
-	s.Name = torrent.handle.Torrent_file().Name()
+	s.Name = torrent.handle.TorrentFile().Name()
 	s.Status = parseTorrentState(status.GetState())
 	s.Progress = status.GetProgress() * 100
-	s.DownloadRate = float32(status.GetDownload_rate()) / 1024
-	s.UploadRate = float32(status.GetUpload_rate()) / 1024
-	s.NumConnectCandidates = status.GetConnect_candidates()
-	s.NumPeers = status.GetNum_peers()
-	s.NumSeeds = status.GetNum_seeds()
+	s.DownloadRate = float32(status.GetDownloadRate()) / 1024
+	s.UploadRate = float32(status.GetUploadRate()) / 1024
+	s.NumConnectCandidates = status.GetConnectCandidates()
+	s.NumPeers = status.GetNumPeers()
+	s.NumSeeds = status.GetNumSeeds()
 
 	return s, nil
 }
 
 func parseTorrentState(state libtorrent.LibtorrentTorrent_statusState_t) TorrentState {
 	switch state {
-	case libtorrent.Torrent_statusQueued_for_checking:
+	case libtorrent.TorrentStatusQueuedForChecking:
 		return QueuedForChecking
-	case libtorrent.Torrent_statusChecking_files:
+	case libtorrent.TorrentStatusCheckingFiles:
 		return CheckingFiles
-	case libtorrent.Torrent_statusDownloading_metadata:
+	case libtorrent.TorrentStatusDownloadingMetadata:
 		return DownloadingMetadata
-	case libtorrent.Torrent_statusDownloading:
+	case libtorrent.TorrentStatusDownloading:
 		return Downloading
-	case libtorrent.Torrent_statusFinished:
+	case libtorrent.TorrentStatusFinished:
 		return Finished
-	case libtorrent.Torrent_statusSeeding:
+	case libtorrent.TorrentStatusSeeding:
 		return Seeding
-	case libtorrent.Torrent_statusAllocating:
+	case libtorrent.TorrentStatusAllocating:
 		return Allocating
-	case libtorrent.Torrent_statusChecking_resume_data:
+	case libtorrent.TorrentStatusCheckingResumeData:
 		return CheckingResumeData
 	default:
 		return Unknown
@@ -479,7 +465,7 @@ func parseTorrentState(state libtorrent.LibtorrentTorrent_statusState_t) Torrent
 func (bt *Client) deleteTorrent(sourcePath string, keepSeedingChan chan struct{}) {
 	if torrent, found := bt.torrents[sourcePath]; found {
 		delete(bt.torrents, sourcePath)
-		bt.session.Remove_torrent(torrent.handle, 0)
+		bt.session.RemoveTorrent(torrent.handle, 0)
 	}
 	if keepSeedingChan != nil {
 		close(keepSeedingChan)
@@ -490,15 +476,15 @@ func (bt *Client) deleteTorrent(sourcePath string, keepSeedingChan chan struct{}
 // At the moment, it is only used to mark a torrent as finished.
 func (bt *Client) alertsConsumer() {
 	for bt.Running {
-		if bt.session.Wait_for_alert(libtorrent.Milliseconds(alertPollInterval)).Swigcptr() != 0 {
-			alert := bt.session.Pop_alert()
-			switch alert.Xtype() {
-			case libtorrent.Torrent_finished_alertAlert_type:
-				handle := libtorrent.SwigcptrTorrent_finished_alert(alert.Swigcptr()).GetHandle()
+		if bt.session.WaitForAlert(libtorrent.Milliseconds(alertPollInterval)).Swigcptr() != 0 {
+			alert := bt.session.PopAlert()
+			switch alert.Type() {
+			case libtorrent.TorrentFinishedAlertAlertType:
+				handle := libtorrent.SwigcptrTorrentFinishedAlert(alert.Swigcptr()).GetHandle()
 				if torrent := bt.findTorrent(handle); torrent != nil {
 					close(torrent.isFinished)
 				} else {
-					log.Printf("bittorrent: Unknown torrent %v finished", handle.Info_hash())
+					log.Printf("bittorrent: Unknown torrent %v finished", handle.InfoHash())
 				}
 			default:
 				if bt.config.Debug {
@@ -515,7 +501,7 @@ func (bt *Client) alertsConsumer() {
 // its .torrent file or its magnet link. So when libtorrent sends us a notification with an handle,
 // we have no common index to retrieve our torrent structure easily. Thus, we use .Equal() which is
 // an alias for the C++ == operator that will match the handle that we already have.
-func (bt *Client) findTorrent(torrent libtorrent.Torrent_handle) *torrent {
+func (bt *Client) findTorrent(torrent libtorrent.TorrentHandle) *torrent {
 	bt.torrentsLock.Lock()
 	defer bt.torrentsLock.Unlock()
 
