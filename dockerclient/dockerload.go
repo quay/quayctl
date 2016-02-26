@@ -4,15 +4,17 @@ package dockerclient
 
 import (
 	"archive/tar"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"time"
 
+	"github.com/cheggaaa/pb"
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/docker/reference"
+	"github.com/dustin/go-humanize"
 	"github.com/fsouza/go-dockerclient"
 )
 
@@ -50,20 +52,73 @@ func DockerLoadTar(reader io.Reader) error {
 
 // DockerLoad performs a `docker load` of the given image with its manifest and layerPaths.
 func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string) error {
+	log.Println("Performing docker load")
+
+	// Connect to Docker.
 	client, err := newDockerClient()
 	if err != nil {
 		return fmt.Errorf("Could not connect to Docker: %v", err)
 	}
 
-	buf := new(bytes.Buffer)
-	opts := docker.LoadImageOptions{buf}
+	// Estimate the total size of the layers.
+	var estimatedSize = uint64(0)
+	for _, layerPath := range layerPaths {
+		layerFile, ferr := os.Open(layerPath)
+		if ferr != nil {
+			return ferr
+		}
 
-	terr := buildDockerLoadTar(image, manifest, layerPaths, buf)
-	if terr != nil {
-		return fmt.Errorf("Could not perform docker-load: %v", terr)
+		stat, serr := layerFile.Stat()
+		if serr != nil {
+			layerFile.Close()
+			return serr
+		}
+
+		estimatedSize = estimatedSize + uint64(stat.Size())
+		layerFile.Close()
 	}
 
+	// Create a new channeled reader-writer to stream the layer data.
+	rw := newChanneledRW()
+	opts := docker.LoadImageOptions{rw}
+	readingComplete := make(chan struct{})
+
+	// Start writing the combined TAR to the writer.
+	go func() {
+		terr := buildDockerLoadTar(image, manifest, layerPaths, rw)
+		if terr != nil {
+			panic(terr)
+		}
+
+		rw.DoneWriting()
+	}()
+
+	// Display a progressbar to track how much data has been read.
+	progressBar := pb.New(100).Prefix("Streaming layer data to Docker: ")
+	progressBar.SetMaxWidth(80)
+	progressBar.ShowCounters = false
+	progressBar.AlwaysUpdate = true
+
+	pool, _ := pb.StartPool(progressBar)
+
+	go func() {
+		for {
+			select {
+			case <-readingComplete:
+				return
+
+			case <-time.After(250 * time.Millisecond):
+				progressBar.Set(int((float64(rw.ReadCount()) / float64(estimatedSize)) * 100))
+				progressBar.Postfix(fmt.Sprintf("%v / %v", humanize.Bytes(rw.ReadCount()), humanize.Bytes(estimatedSize)))
+			}
+		}
+	}()
+
+	// Call load with the reader.
 	lerr := client.LoadImage(opts)
+	readingComplete <- struct{}{}
+	pool.Stop()
+
 	if lerr != nil {
 		return fmt.Errorf("Could not perform docker-load: %v", lerr)
 	}

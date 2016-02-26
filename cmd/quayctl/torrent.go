@@ -177,20 +177,13 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 			blobPaths[blobSum] = blobPath.(string)
 		}
 
-		if seedOption == torrentNoSeed {
-			downloadInfo.pool.Stop()
-			log.Println("Performing docker load...")
-		}
+		// Close the pool for the torrent progress bars.
+		downloadInfo.pool.Stop()
 
 		// Perform the docker load.
 		lerr := dockerclient.DockerLoad(named, v1Manifest, blobPaths)
 		if lerr != nil {
-			downloadInfo.pool.Stop()
 			log.Fatalf("%v", lerr)
-		}
-
-		if seedOption == torrentNoSeed {
-			log.Println("Docker load completed")
 		}
 	}
 
