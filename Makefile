@@ -35,7 +35,9 @@ RM = rm
 include platform.mk
 
 # Additional tags and LDFLAGS to use during the compilation.
-GO_LDFLAGS += -w
+GITHASH = $(shell $(GIT) rev-parse HEAD)
+BUILDTIME = $(shell $(DATE) -u +%Y-%m-%d_%I:%M:%S%p)
+GO_LDFLAGS += -w -X "main.githash=$(GITHASH)" -X "main.buildtime=$(BUILDTIME)"
 GO_GCFLAGS +=
 GO_BUILD_TAGS = netgo std
 LDFLAGS =
@@ -60,7 +62,7 @@ $(PLATFORMS):
 		-e GOPATH=/go \
 		-w /go/src/$(PROJECT) \
 		$(LIBTORRENT_GO_DOCKER_IMAGE):$@ \
-		make $(NAME) TARGET_OS=$(TARGET_OS) TARGET_ARCH=$(TARGET_ARCH)
+		make $(NAME) TARGET_OS=$(TARGET_OS) TARGET_ARCH=$(TARGET_ARCH) GITHASH=$(GITHASH) BUILDTIME=$(BUILDTIME)
 
 # Build libtorrent-go for the specified platform.
 $(GOPATH)/pkg/%/$(LIBTORRENT_GO).a:
