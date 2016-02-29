@@ -1,7 +1,7 @@
 # Name of the project.
 NAME = quayctl
-PROJECT = github.com/coreos-inc/quayctl
-PKG = github.com/coreos-inc/quayctl/cmd/quayctl
+PROJECT = github.com/coreos/quayctl
+PKG = github.com/coreos/quayctl/cmd/quayctl
 
 # Platforms on which we want to build the project.
 PLATFORMS = \

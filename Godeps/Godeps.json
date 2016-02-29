@@ -1,5 +1,5 @@
 {
-	"ImportPath": "github.com/coreos-inc/quayctl",
+	"ImportPath": "github.com/coreos/quayctl",
 	"GoVersion": "go1.6",
 	"Packages": [
 		"./..."

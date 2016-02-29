@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreos-inc/quayctl/bittorrent"
+	"github.com/coreos/quayctl/bittorrent"
 )
 
 var (
