@@ -17,12 +17,14 @@
 package dockerdist
 
 import (
+	"errors"
 	"log"
 	"net/url"
 
 	distlib "github.com/docker/distribution"
 	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/manifest/schema1"
+	"github.com/docker/distribution/registry/client"
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/distribution"
 	"github.com/docker/docker/reference"
@@ -99,6 +101,14 @@ func getDigest(ctx context.Context, repo distlib.Repository, image reference.Nam
 	// Get Tag's Descriptor.
 	descriptor, err := tagSvc.Get(ctx, tag)
 	if err != nil {
+		// Docker returns an UnexpectedHTTPResponseError if it cannot parse the JSON body of an
+		// unexpected error. Unfortunately, HEAD requests *by definition* don't have bodies, so
+		// Docker will return this error for non-200 HEAD requests. We therefore have to hack
+		// around it... *sigh*.
+		if _, ok := err.(*client.UnexpectedHTTPResponseError); ok {
+			return "", errors.New("Received error when trying to fetch the specified tag: it might not exist or you do not have access")
+		}
+
 		return "", err
 	}
 
