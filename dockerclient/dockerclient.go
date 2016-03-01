@@ -42,17 +42,24 @@ func HasImage(imageId string) (bool, error) {
 }
 
 func newDockerClient() (*docker.Client, error) {
-	host, err := url.Parse(os.Getenv("DOCKER_HOST"))
-	if err != nil {
-		return nil, err
+	var dockerHost = os.Getenv("DOCKER_HOST")
+	if dockerHost == "" {
+		dockerHost = "unix:///var/run/docker.sock"
+	} else {
+		host, err := url.Parse(os.Getenv("DOCKER_HOST"))
+		if err != nil {
+			return nil, err
+		}
+
+		// Change to an https connection if we have a cert path.
+		if os.Getenv("DOCKER_CERT_PATH") != "" {
+			host.Scheme = "https"
+		}
+
+		dockerHost = host.String()
 	}
 
-	// Change to an https connection if we have a cert path.
-	if os.Getenv("DOCKER_CERT_PATH") != "" {
-		host.Scheme = "https"
-	}
-
-	c, err := docker.NewClient(host.String())
+	c, err := docker.NewClient(dockerHost)
 	if err != nil {
 		return nil, err
 	}
