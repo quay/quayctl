@@ -46,7 +46,7 @@ func newDockerClient() (*docker.Client, error) {
 	if dockerHost == "" {
 		dockerHost = "unix:///var/run/docker.sock"
 	} else {
-		host, err := url.Parse(os.Getenv("DOCKER_HOST"))
+		host, err := url.Parse(dockerHost)
 		if err != nil {
 			return nil, err
 		}
