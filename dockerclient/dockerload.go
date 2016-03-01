@@ -113,25 +113,30 @@ func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPa
 	progressBar.ShowCounters = false
 	progressBar.AlwaysUpdate = true
 
-	pool, _ := pb.StartPool(progressBar)
+	pool, err := pb.StartPool(progressBar)
+	hasProgressBar := err == nil
+	if hasProgressBar {
+		go func() {
+			for {
+				select {
+				case <-readingComplete:
+					return
 
-	go func() {
-		for {
-			select {
-			case <-readingComplete:
-				return
-
-			case <-time.After(250 * time.Millisecond):
-				progressBar.Set(int((float64(rw.ReadCount()) / float64(estimatedSize)) * 100))
-				progressBar.Postfix(fmt.Sprintf("%v / %v", humanize.Bytes(rw.ReadCount()), humanize.Bytes(estimatedSize)))
+				case <-time.After(250 * time.Millisecond):
+					progressBar.Set(int((float64(rw.ReadCount()) / float64(estimatedSize)) * 100))
+					progressBar.Postfix(fmt.Sprintf("%v / %v", humanize.Bytes(rw.ReadCount()), humanize.Bytes(estimatedSize)))
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	// Call load with the reader.
 	lerr := client.LoadImage(opts)
 	readingComplete <- struct{}{}
-	pool.Stop()
+
+	if hasProgressBar {
+		pool.Stop()
+	}
 
 	if lerr != nil {
 		return fmt.Errorf("Could not perform docker-load: %v", lerr)

@@ -76,7 +76,6 @@ func getRepositoryClient(image reference.Named, insecure bool, scopes ...string)
 		TLSConfig:    &tlsConfig,
 	}
 
-	log.Printf("Retrieving Docker client for image %v", image)
 	ctx := context.Background()
 	repo, _, err := distribution.NewV2Repository(ctx, repoInfo, endpoint, metaHeaders, &authConfig, scopes...)
 	return repo, err
