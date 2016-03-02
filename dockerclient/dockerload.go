@@ -19,6 +19,7 @@ package dockerclient
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -73,6 +74,10 @@ func DockerLoadTar(reader io.Reader) error {
 
 // DockerLoad performs a `docker load` of the given image with its manifest and layerPaths.
 func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string, localIp string) error {
+	if !isLocalDockerDaemon() && localIp == "localhost" {
+		return errors.New("The `--local-ip` flag is required for non-local Docker daemon")
+	}
+
 	go func() {
 		err := runRegistry(image, manifest, layerPaths)
 		if err != nil {

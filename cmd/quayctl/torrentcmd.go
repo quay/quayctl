@@ -37,7 +37,7 @@ var (
 	torrentDebug                bool
 	insecureFlag                bool
 	squashedFlag                bool
-	localIpFlag                 string = "localhost"
+	localIpFlag                 string
 )
 
 func init() {

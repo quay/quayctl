@@ -101,7 +101,7 @@ func requiredLayersAndBlobs(manifest *schema1.SignedManifest, option dockerLayer
 
 	// Check each layer for its existance in Docker.
 	var blobsToDownload = make([]schema1.FSLayer, 0)
-	for index, _ := range manifest.History {
+	for index := range manifest.History {
 		found, _ := dockerclient.HasImage(manifest.FSLayers[index].BlobSum.String())
 		if found {
 			return buildLayerInfo(manifest.History[0:index]), blobsToDownload

@@ -25,6 +25,8 @@ import (
 	"github.com/fsouza/go-dockerclient"
 )
 
+const DOCKER_UNIX_SOCKET = "unix:///var/run/docker.sock"
+
 // HasImage returns true if the current Docker daemon reports that the image with the given
 // ID exists.
 func HasImage(imageId string) (bool, error) {
@@ -41,10 +43,16 @@ func HasImage(imageId string) (bool, error) {
 	return found.ID == imageId, nil
 }
 
+// isLocalDockerDaemon returns true if the Docker daemon is running locally.
+func isLocalDockerDaemon() bool {
+	dockerHost := os.Getenv("DOCKER_HOST")
+	return dockerHost == "" || dockerHost == DOCKER_UNIX_SOCKET
+}
+
 func newDockerClient() (*docker.Client, error) {
 	var dockerHost = os.Getenv("DOCKER_HOST")
 	if dockerHost == "" {
-		dockerHost = "unix:///var/run/docker.sock"
+		dockerHost = DOCKER_UNIX_SOCKET
 	} else {
 		host, err := url.Parse(dockerHost)
 		if err != nil {
