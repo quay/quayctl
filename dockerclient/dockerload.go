@@ -17,17 +17,27 @@
 package dockerclient
 
 import (
-	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"os"
+	"net/http"
+	"time"
 
+	logrus "github.com/Sirupsen/logrus"
+
+	"github.com/docker/distribution/configuration"
+	"github.com/docker/distribution/context"
 	"github.com/docker/distribution/manifest/schema1"
+	"github.com/docker/distribution/version"
 	"github.com/docker/docker/reference"
 	"github.com/fsouza/go-dockerclient"
+
+	"github.com/docker/distribution/registry/handlers"
+	"github.com/docker/distribution/registry/listener"
+	"github.com/docker/distribution/registry/storage/driver/factory"
 )
 
 // V1LayerInfo holds information derived from a V1 history JSON blob.
@@ -63,7 +73,18 @@ func DockerLoadTar(reader io.Reader) error {
 }
 
 // DockerLoad performs a `docker load` of the given image with its manifest and layerPaths.
-func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string) error {
+func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string, localIp string) error {
+	if !isLocalDockerDaemon() && localIp == "localhost" {
+		return errors.New("The `--local-ip` flag is required for non-local Docker daemon")
+	}
+
+	go func() {
+		err := runRegistry(image, manifest, layerPaths)
+		if err != nil {
+			log.Fatalf("Error running local registry: %v", err)
+		}
+	}()
+
 	// Connect to Docker.
 	log.Println("Connecting to docker")
 	client, err := newDockerClient()
@@ -71,101 +92,98 @@ func DockerLoad(image reference.Named, manifest *schema1.SignedManifest, layerPa
 		return fmt.Errorf("Could not connect to Docker: %v", err)
 	}
 
-	var buf bytes.Buffer
+	// Wait a bit for the registry to start.
+	time.Sleep(2 * time.Second)
 
-	log.Println("Creating data for docker load")
-	terr := buildDockerLoadTar(image, manifest, layerPaths, &buf)
-	if terr != nil {
-		return fmt.Errorf("Could not build data for docker-load: %v", terr)
+	// Conduct a pull of the image.
+	log.Println("Pulling image")
+
+	var tagName = "latest"
+	if tagged, ok := image.(reference.NamedTagged); ok {
+		tagName = tagged.Tag()
 	}
 
-	// Call load with the reader.
-	log.Println("Calling docker load")
-	opts := docker.LoadImageOptions{&buf}
-	lerr := client.LoadImage(opts)
-	if lerr != nil {
-		return fmt.Errorf("Could not perform docker-load: %v", lerr)
+	w := newPullProgressDisplay(tagName, len(layerPaths))
+	defer w.Done()
+
+	localRegistry := fmt.Sprintf("%s:5000", localIp)
+	localRepository := fmt.Sprintf("%s/%s", localRegistry, image.RemoteName())
+
+	opts := docker.PullImageOptions{
+		Repository:    localRepository,
+		Registry:      localRegistry,
+		Tag:           tagName,
+		OutputStream:  w,
+		RawJSONStream: true,
+	}
+
+	auth := docker.AuthConfiguration{}
+	perr := client.PullImage(opts, auth)
+	if perr != nil {
+		return fmt.Errorf("Error pulling image into Docker: %v", perr)
+	}
+
+	// Tag the image to the name expected.
+	tagOpts := docker.TagImageOptions{
+		Repo:  image.FullName(),
+		Tag:   tagName,
+		Force: true,
+	}
+
+	localName := fmt.Sprintf("%s:%s", localRepository, tagName)
+	terr := client.TagImage(localName, tagOpts)
+	if terr != nil {
+		return fmt.Errorf("Error re-tagging image in Docker: %v", terr)
+	}
+
+	// Untag the image with its temporary name.
+	rerr := client.RemoveImage(localName)
+	if rerr != nil {
+		return fmt.Errorf("Error removing older tag in Docker: %v", rerr)
+
 	}
 
 	return nil
 }
 
-// buildDockerLoadTar builds a TAR in the format of `docker load` V1, writing it to the specified
-// writer.
-func buildDockerLoadTar(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string, w io.Writer) error {
-	// Docker import V1 Format (.tar):
-	//  VERSION - The docker import version: '1.0'
-	//  repositories - JSON file containing a repo -> tag -> image map
-	//  {image ID folder}:
-	//    json - The layer JSON
-	//     layer.tar - The TARed contents of the layer
+func runRegistry(image reference.Named, manifest *schema1.SignedManifest, layerPaths map[string]string) error {
+	factory.Register("localserve", &localServeDriverFactory{
+		image:      image,
+		manifest:   manifest,
+		layerPaths: layerPaths,
+	})
 
-	tw := tar.NewWriter(w)
+	buf := bytes.NewBufferString(`
+version: 0.1
+log:
+  level: error
+  formatter: text
+http:
+  addr: localhost:5000
+storage:
+  localserve:
+compatibility:
+  schema1:
+    disablesignaturestore: true
+`)
 
-	// Write the VERSION file.
-	writeTarFile(tw, "VERSION", []byte("1.0"))
+	logrus.SetLevel(logrus.PanicLevel)
 
-	// Write the repositories file
-	//
-	// {
-	//   "quay.io/some/repo": {
-	//      "latest": "finallayerid"
-	//   }
-	// }
-	topLayerId := GetLayerInfo(manifest.History[0]).ID
-	tagMap := map[string]string{}
-	tagMap[manifest.Tag] = topLayerId
-
-	repositoriesMap := map[string]interface{}{}
-	repositoriesMap[image.Hostname()+"/"+image.RemoteName()] = tagMap
-
-	jsonString, _ := json.Marshal(repositoriesMap)
-	writeTarFile(tw, "repositories", []byte(jsonString))
-
-	// For each layer in the manifest, write a folder containing its JSON information, as well
-	// as its layer TAR.
-	for index, layer := range manifest.FSLayers {
-		layerInfo := GetLayerInfo(manifest.History[index])
-
-		// {someLayerId}/json
-		writeTarFile(tw, fmt.Sprintf("%s/json", layerInfo.ID), []byte(manifest.History[index].V1Compatibility))
-
-		// {someLayerId}/layer.tar
-		layerFile, err := os.Open(layerPaths[layer.BlobSum.String()])
-		if err != nil {
-			return err
-		}
-
-		layerStat, err := layerFile.Stat()
-		if err != nil {
-			return err
-		}
-
-		writeTarHeader(tw, fmt.Sprintf("%s/layer.tar", layerInfo.ID), layerStat.Size())
-		io.Copy(tw, layerFile)
-		layerFile.Close()
+	ctx := context.WithVersion(context.Background(), version.Version)
+	config, err := configuration.Parse(buf)
+	if err != nil {
+		panic(err)
 	}
 
-	// Close writing to the TAR.
-	return tw.Close()
-}
-
-func writeTarHeader(tw *tar.Writer, filename string, filesize int64) {
-	hdr := &tar.Header{
-		Name: filename,
-		Mode: 0600,
-		Size: filesize,
+	handler := handlers.NewApp(ctx, config)
+	server := &http.Server{
+		Handler: handler,
 	}
 
-	if err := tw.WriteHeader(hdr); err != nil {
-		log.Fatalln(err)
+	ln, err := listener.NewListener(config.HTTP.Net, config.HTTP.Addr)
+	if err != nil {
+		return err
 	}
-}
 
-func writeTarFile(tw *tar.Writer, filename string, data []byte) {
-	writeTarHeader(tw, filename, int64(len(data)))
-
-	if _, err := tw.Write(data); err != nil {
-		log.Fatalln(err)
-	}
+	return server.Serve(ln)
 }

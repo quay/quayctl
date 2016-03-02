@@ -31,7 +31,7 @@ func HistoryFromConfig(imageJSON []byte, emptyLayer bool) (image.History, error)
 	return image.History{
 		Author:     v1Image.Author,
 		Created:    v1Image.Created,
-		CreatedBy:  strings.Join(v1Image.ContainerConfig.Cmd.Slice(), " "),
+		CreatedBy:  strings.Join(v1Image.ContainerConfig.Cmd, " "),
 		Comment:    v1Image.Comment,
 		EmptyLayer: emptyLayer,
 	}, nil
@@ -142,7 +142,7 @@ func rawJSON(value interface{}) *json.RawMessage {
 // ValidateID checks whether an ID string is a valid image ID.
 func ValidateID(id string) error {
 	if ok := validHex.MatchString(id); !ok {
-		return fmt.Errorf("image ID '%s' is invalid ", id)
+		return fmt.Errorf("image ID %q is invalid", id)
 	}
 	return nil
 }

@@ -101,9 +101,8 @@ func requiredLayersAndBlobs(manifest *schema1.SignedManifest, option dockerLayer
 
 	// Check each layer for its existance in Docker.
 	var blobsToDownload = make([]schema1.FSLayer, 0)
-	for index, layer := range manifest.History {
-		layerInfo := dockerclient.GetLayerInfo(layer)
-		found, _ := dockerclient.HasImage(layerInfo.ID)
+	for index := range manifest.History {
+		found, _ := dockerclient.HasImage(manifest.FSLayers[index].BlobSum.String())
 		if found {
 			return buildLayerInfo(manifest.History[0:index]), blobsToDownload
 		}
@@ -149,7 +148,7 @@ func buildTorrentInfoForBlob(named reference.Named, blobs []schema1.FSLayer, cre
 
 // torrentImage performs a torrent download of a Docker image, with specified options for loading,
 // cache checking and seeding.
-func torrentImage(image string, loadOption dockerLoadOption, layersOption dockerLayersOption, seedOption torrentSeedOption) error {
+func torrentImage(image string, loadOption dockerLoadOption, layersOption dockerLayersOption, seedOption torrentSeedOption, localIp string) error {
 	// Retrieve the credentials (if any) for the current image.
 	credentials, _ := dockerdist.GetAuthCredentials(image)
 
@@ -196,7 +195,7 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 		}
 
 		// Perform the docker load.
-		lerr := dockerclient.DockerLoad(named, v1Manifest, blobPaths)
+		lerr := dockerclient.DockerLoad(named, v1Manifest, blobPaths, localIp)
 		if lerr != nil {
 			log.Fatalf("%v", lerr)
 		}
