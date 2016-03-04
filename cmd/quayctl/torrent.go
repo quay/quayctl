@@ -246,6 +246,7 @@ func torrentSquashedImage(image string, loadOption dockerLoadOption, seedOption 
 	}
 
 	// Start the download of the torrent.
+	log.Println("Starting download of squashed image")
 	downloadInfo := downloadTorrents([]torrentInfo{torrent}, seedOption)
 
 	// Wait for the torrent to complete.
@@ -308,6 +309,11 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 		hasProgressBars = false
 	}
 
+	if torrentDebug {
+		pool.Stop()
+		hasProgressBars = false
+	}
+
 	// Initialize Bittorrent client.
 	bt, err := initBitTorrentClient()
 	if err != nil {
@@ -349,6 +355,24 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 				}
 			}
 		}()
+	} else {
+		// Write the status every 30s for each torrent.
+		go func() {
+			for {
+				select {
+				case <-completed:
+					return
+
+				case <-time.After(30 * time.Second):
+					for _, torrent := range torrents {
+						status, err := bt.GetStatus(torrent.torrentPath)
+						if err == nil {
+							log.Printf("Torrent %v: %s DL%v/s UL%v/s", shortenName(torrent.title), status.Status, humanize.Bytes(uint64(status.DownloadRate*1024)), humanize.Bytes(uint64(status.UploadRate*1024)))
+						}
+					}
+				}
+			}
+		}()
 	}
 
 	// Start the downloads for each torrent.
@@ -381,6 +405,9 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 
 			// Wait for seed to finish.
 			if localSeedDuration != nil {
+				if !hasProgressBars {
+					log.Printf("Seeding layer %v\n", torrent.id)
+				}
 				<-keepSeeding
 			}
 
