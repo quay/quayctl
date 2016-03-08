@@ -38,6 +38,8 @@ var (
 	insecureFlag                bool
 	squashedFlag                bool
 	localIpFlag                 string
+	skipWebSeed                 bool
+	trackers                    []string
 )
 
 func init() {
@@ -52,6 +54,8 @@ func init() {
 	torrentCommand.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "If specified, HTTP is used in place of HTTPS to talk to the registry")
 	torrentCommand.PersistentFlags().BoolVar(&squashedFlag, "squashed", false, "If specified, the squashed version of the image will be pulled")
 	torrentCommand.PersistentFlags().StringVar(&localIpFlag, "local-ip", "localhost", "The IP address of the local machine. Used to connect Docker to quayctl.")
+	torrentCommand.PersistentFlags().BoolVar(&skipWebSeed, "skip-web-seed", false, "If true, the web seed will not be used when pulling")
+	torrentCommand.PersistentFlags().StringSliceVar(&trackers, "tracker", []string{}, "If specified, will override the tracker(s) used")
 
 	torrentCommand.AddCommand(torrentSeedCommand)
 	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 0, "Duration of the seeding. If not specified, will seed forever.")
@@ -89,15 +93,16 @@ func torrentPullRun(cmd *cobra.Command, args []string) {
 	}
 
 	image := args[0]
+	torrentConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
 
 	if squashedFlag {
-		if err := torrentSquashedImage(image, dockerPerformLoad, torrentNoSeed); err != nil {
+		if err := torrentSquashedImage(image, dockerPerformLoad, torrentNoSeed, torrentConfig); err != nil {
 			log.Fatal(err)
 		}
 
 		log.Printf("Successfully pulled squashed image %v", image)
 	} else {
-		if err := torrentImage(image, dockerPerformLoad, dockerSkipExistingLayers, torrentNoSeed, localIpFlag); err != nil {
+		if err := torrentImage(image, dockerPerformLoad, dockerSkipExistingLayers, torrentNoSeed, localIpFlag, torrentConfig); err != nil {
 			log.Fatal(err)
 		}
 
@@ -111,13 +116,14 @@ func torrentSeedRun(cmd *cobra.Command, args []string) {
 	}
 
 	image := args[0]
+	torrentConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
 
 	if squashedFlag {
-		if err := torrentSquashedImage(image, dockerSkipLoad, torrentSeedAfterPull); err != nil {
+		if err := torrentSquashedImage(image, dockerSkipLoad, torrentSeedAfterPull, torrentConfig); err != nil {
 			log.Fatal(err)
 		}
 	} else {
-		if err := torrentImage(image, dockerSkipLoad, dockerAllLayers, torrentSeedAfterPull, localIpFlag); err != nil {
+		if err := torrentImage(image, dockerSkipLoad, dockerAllLayers, torrentSeedAfterPull, localIpFlag, torrentConfig); err != nil {
 			log.Fatal(err)
 		}
 	}

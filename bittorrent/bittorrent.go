@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/coreos/libtorrent-go"
+	bencode "github.com/jackpal/bencode-go"
 )
 
 // Client wraps libtorrent and allows us to download torrents easily.
@@ -46,6 +47,17 @@ type Client struct {
 
 	// Refers to the configuration that has been used in NewClient to configure libtorrent.
 	config ClientConfig
+}
+
+// DownloadConfig represents extra configuration for downloading a specific torrent.
+type DownloadConfig struct {
+	// SkipWebseed, if set to true, skips the webseed when downloading the torrent.
+	SkipWebseed bool
+
+	// CustomTrackers hold the domain names of the custom tracker(s) to use for downloading the
+	// torrent.
+	// If specified, the default tracker is not used.
+	CustomTrackers []string
 }
 
 // torrent stores the libtorrent handle referring an active torrent and a channel that is closed
@@ -321,7 +333,7 @@ func (bt *Client) Stop() {
 // keepSeedingChan closed after that duration.
 // - seedDuration == 0, seed forever: the torrent will not be removed and keepSeedingChan will not
 // be closed until Stop() is called.
-func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.Duration) (string, chan struct{}, error) {
+func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.Duration, config DownloadConfig) (string, chan struct{}, error) {
 	if !bt.Running {
 		return "", nil, errors.New("Use Start() before Download()")
 	}
@@ -377,8 +389,57 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 	if strings.HasPrefix(torrentPath, "magnet:") {
 		torrentParams.SetUrl(torrentPath)
 	} else {
+		if len(config.CustomTrackers) > 0 || config.SkipWebseed {
+			// Remove the default tracker and/or webseed from the torrent.
+			torrentFile, err := os.Open(torrentPath)
+			if err != nil {
+				torrentFile.Close()
+				return "", nil, err
+			}
+
+			result, berr := bencode.Decode(torrentFile)
+			if berr != nil {
+				torrentFile.Close()
+				return "", nil, berr
+			}
+
+			torrentFile.Close()
+			benmap := result.(map[string]interface{})
+			if config.SkipWebseed {
+				delete(benmap, "url-list")
+			}
+
+			if len(config.CustomTrackers) > 0 {
+				delete(benmap, "announce")
+			}
+
+			writeTorrentFile, err := os.OpenFile(torrentPath, os.O_WRONLY|os.O_TRUNC, 0777)
+			if err != nil {
+				writeTorrentFile.Close()
+				return "", nil, err
+			}
+
+			werr := bencode.Marshal(writeTorrentFile, benmap)
+			if werr != nil {
+				writeTorrentFile.Close()
+				return "", nil, werr
+			}
+			writeTorrentFile.Close()
+		}
+
 		torrentInfo := libtorrent.NewTorrentInfo(torrentPath)
 		torrentParams.SetTorrentInfo(torrentInfo)
+
+		if len(config.CustomTrackers) > 0 {
+			torrentParams.GetTrackers().Clear()
+			for _, tracker := range config.CustomTrackers {
+				torrentParams.GetTrackers().PushBack(tracker)
+			}
+		}
+
+		if config.SkipWebseed {
+			torrentParams.GetUrlSeeds().Clear()
+		}
 	}
 	torrentParams.SetSavePath(downloadPath)
 

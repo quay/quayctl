@@ -148,7 +148,7 @@ func buildTorrentInfoForBlob(named reference.Named, blobs []schema1.FSLayer, cre
 
 // torrentImage performs a torrent download of a Docker image, with specified options for loading,
 // cache checking and seeding.
-func torrentImage(image string, loadOption dockerLoadOption, layersOption dockerLayersOption, seedOption torrentSeedOption, localIp string) error {
+func torrentImage(image string, loadOption dockerLoadOption, layersOption dockerLayersOption, seedOption torrentSeedOption, localIp string, downloadConfig bittorrent.DownloadConfig) error {
 	// Retrieve the credentials (if any) for the current image.
 	credentials, _ := dockerdist.GetAuthCredentials(image)
 
@@ -178,7 +178,7 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 
 	// Build the list of torrent URLs, one per file system layer needed for download.
 	torrents := buildTorrentInfoForBlob(named, blobs, credentials)
-	downloadInfo := downloadTorrents(torrents, seedOption)
+	downloadInfo := downloadTorrents(torrents, seedOption, downloadConfig)
 
 	if loadOption == dockerPerformLoad {
 		// Wait for all layers to be downloaded.
@@ -209,7 +209,7 @@ func torrentImage(image string, loadOption dockerLoadOption, layersOption docker
 
 // torrentSquashedImage performs a torrent download of a squashed Docker image, with specified
 // options for loading and seeding.
-func torrentSquashedImage(image string, loadOption dockerLoadOption, seedOption torrentSeedOption) error {
+func torrentSquashedImage(image string, loadOption dockerLoadOption, seedOption torrentSeedOption, downloadConfig bittorrent.DownloadConfig) error {
 	// Retrieve the credentials (if any) for the current image.
 	credentials, _ := dockerdist.GetAuthCredentials(image)
 
@@ -247,7 +247,7 @@ func torrentSquashedImage(image string, loadOption dockerLoadOption, seedOption 
 
 	// Start the download of the torrent.
 	log.Println("Starting download of squashed image")
-	downloadInfo := downloadTorrents([]torrentInfo{torrent}, seedOption)
+	downloadInfo := downloadTorrents([]torrentInfo{torrent}, seedOption, downloadConfig)
 
 	// Wait for the torrent to complete.
 	<-downloadInfo.completeChannel
@@ -277,7 +277,7 @@ type downloadTorrentInfo struct {
 
 // downloadTorrents starts the downloads of all the specified torrents, with optional seeding once
 // completed. Returns immediately with a downloadTorrentInfo struct.
-func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) downloadTorrentInfo {
+func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption, downloadConfig bittorrent.DownloadConfig) downloadTorrentInfo {
 	// Add a channel for each torrent to track state.
 	torrentDownloadedChannels := map[string]chan struct{}{}
 	torrentCompletedChannels := map[string]chan struct{}{}
@@ -379,7 +379,7 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption) down
 	for _, torrent := range torrents {
 		go func(torrent torrentInfo) {
 			// Start downloading the torrent.
-			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, localSeedDuration)
+			path, keepSeeding, err := bt.Download(torrent.torrentPath, torrentFolder, localSeedDuration, downloadConfig)
 			if err != nil {
 				if hasProgressBars {
 					pool.Stop()
