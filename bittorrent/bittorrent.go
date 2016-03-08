@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/coreos/libtorrent-go"
-	bencode "github.com/jackpal/bencode-go"
 )
 
 // Client wraps libtorrent and allows us to download torrents easily.
@@ -389,42 +388,9 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 	if strings.HasPrefix(torrentPath, "magnet:") {
 		torrentParams.SetUrl(torrentPath)
 	} else {
+		// Remove the default tracker and/or webseed from the torrent.
 		if len(config.CustomTrackers) > 0 || config.SkipWebseed {
-			// Remove the default tracker and/or webseed from the torrent.
-			torrentFile, err := os.Open(torrentPath)
-			if err != nil {
-				torrentFile.Close()
-				return "", nil, err
-			}
-
-			result, berr := bencode.Decode(torrentFile)
-			if berr != nil {
-				torrentFile.Close()
-				return "", nil, berr
-			}
-
-			torrentFile.Close()
-			benmap := result.(map[string]interface{})
-			if config.SkipWebseed {
-				delete(benmap, "url-list")
-			}
-
-			if len(config.CustomTrackers) > 0 {
-				delete(benmap, "announce")
-			}
-
-			writeTorrentFile, err := os.OpenFile(torrentPath, os.O_WRONLY|os.O_TRUNC, 0777)
-			if err != nil {
-				writeTorrentFile.Close()
-				return "", nil, err
-			}
-
-			werr := bencode.Marshal(writeTorrentFile, benmap)
-			if werr != nil {
-				writeTorrentFile.Close()
-				return "", nil, werr
-			}
-			writeTorrentFile.Close()
+			updateTorrentFile(torrentPath, config.SkipWebseed, len(config.CustomTrackers) > 0)
 		}
 
 		torrentInfo := libtorrent.NewTorrentInfo(torrentPath)
