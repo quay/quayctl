@@ -2,6 +2,12 @@
 #include <libtorrent/add_torrent_params.hpp>
 %}
 
+%include "std_vector.i"
+
+namespace std {
+   %template(vectorstr) vector<std::string>;
+};
+
 %extend libtorrent::add_torrent_params {
 	const libtorrent::torrent_info* get_torrent_info() {
 		return self->ti.get();

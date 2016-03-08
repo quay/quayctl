@@ -24,7 +24,7 @@
 		},
 		{
 			"ImportPath": "github.com/coreos/libtorrent-go",
-			"Rev": "3aff33b2fce2cb0a3bf2d80b317d12966520dc18"
+			"Rev": "ff46e7b9f61fadaeae66d9582bcf4fb4d5a66bad"
 		},
 		{
 			"ImportPath": "github.com/docker/distribution",
