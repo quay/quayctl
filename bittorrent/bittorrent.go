@@ -48,6 +48,17 @@ type Client struct {
 	config ClientConfig
 }
 
+// DownloadConfig represents extra configuration for downloading a specific torrent.
+type DownloadConfig struct {
+	// SkipWebseed, if set to true, skips the webseed when downloading the torrent.
+	SkipWebseed bool
+
+	// CustomTrackers hold the domain names of the custom tracker(s) to use for downloading the
+	// torrent.
+	// If specified, the default tracker is not used.
+	CustomTrackers []string
+}
+
 // torrent stores the libtorrent handle referring an active torrent and a channel that is closed
 // once the torrent's download is finished.
 type torrent struct {
@@ -321,7 +332,7 @@ func (bt *Client) Stop() {
 // keepSeedingChan closed after that duration.
 // - seedDuration == 0, seed forever: the torrent will not be removed and keepSeedingChan will not
 // be closed until Stop() is called.
-func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.Duration) (string, chan struct{}, error) {
+func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.Duration, config DownloadConfig) (string, chan struct{}, error) {
 	if !bt.Running {
 		return "", nil, errors.New("Use Start() before Download()")
 	}
@@ -377,8 +388,24 @@ func (bt *Client) Download(sourcePath, downloadPath string, seedDuration *time.D
 	if strings.HasPrefix(torrentPath, "magnet:") {
 		torrentParams.SetUrl(torrentPath)
 	} else {
+		// Remove the default tracker and/or webseed from the torrent.
+		if len(config.CustomTrackers) > 0 || config.SkipWebseed {
+			updateTorrentFile(torrentPath, config.SkipWebseed, len(config.CustomTrackers) > 0)
+		}
+
 		torrentInfo := libtorrent.NewTorrentInfo(torrentPath)
 		torrentParams.SetTorrentInfo(torrentInfo)
+
+		if len(config.CustomTrackers) > 0 {
+			torrentParams.GetTrackers().Clear()
+			for _, tracker := range config.CustomTrackers {
+				torrentParams.GetTrackers().PushBack(tracker)
+			}
+		}
+
+		if config.SkipWebseed {
+			torrentParams.GetUrlSeeds().Clear()
+		}
 	}
 	torrentParams.SetSavePath(downloadPath)
 

@@ -545,6 +545,10 @@
 			"Rev": "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75"
 		},
 		{
+			"ImportPath": "github.com/jackpal/bencode-go",
+			"Rev": "c153d0d9942d70af3beef3a24f0fd3296a9a8646"
+		},
+		{
 			"ImportPath": "github.com/opencontainers/runc/libcontainer/user",
 			"Comment": "v0.0.8-108-gb86570a",
 			"Rev": "b86570a4d4a15f9fa2da9334e164b5f260552b4c"
