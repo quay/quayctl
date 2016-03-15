@@ -118,7 +118,7 @@ quayctl torrent pull quay.io/myprivate/imagehere
 Downloading manifest for image quay.io/myprivate/imagehere...
 ```
 
-### I receive a 416 error when trying to pull a squashed image
+### I receive a 406 error when trying to pull a squashed image
 
 In order for Quay to serve the torrent for a squashed image, the image must have been previously computed and cached. Squashed images are not created until
 they are first requested, so a download of the squashed image via the normal `curl` method is required before `torrent pull --squashed`
