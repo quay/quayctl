@@ -1,4 +1,4 @@
-// Copyright 2015 CoreOS, Inc.
+// Copyright 2016 CoreOS, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,14 +36,53 @@ var (
 	torrentEncryptionMode       int
 	torrentDebug                bool
 	insecureFlag                bool
-	squashedFlag                bool
-	localIpFlag                 string
 	skipWebSeed                 bool
 	trackers                    []string
 )
 
 func init() {
+	torrentFolder = os.TempDir() + "/quayctl/torrents"
+	torrentFingerprint = bittorrent.ClientFingerprint{"QU", 0, 1, 0, 0}
+}
+
+// addTorrentCommands adds the torrent pull and seed commands to the engine command.
+func addTorrentCommands(engine engine, engineCommand *cobra.Command) {
+	localTorrentPullRun := func(cmd *cobra.Command, args []string) {
+		torrentPullRun(cmd, args, engine)
+	}
+
+	localTorrentSeedRun := func(cmd *cobra.Command, args []string) {
+		torrentSeedRun(cmd, args, engine)
+	}
+
+	// Add the torrent command and its two subcommands: pull and seed.
+	torrentCommand := &cobra.Command{
+		Use:   "torrent",
+		Short: "interact with Quay via BitTorrent",
+		Run: func(cmd *cobra.Command, args []string) {
+			cmd.Usage()
+			os.Exit(1)
+		},
+	}
+
+	torrentPullCommand := &cobra.Command{
+		Use:   "pull",
+		Short: "pull a container image",
+		Run:   localTorrentPullRun,
+	}
+
+	torrentSeedCommand := &cobra.Command{
+		Use:   "seed",
+		Short: "seed a container image",
+		Run:   localTorrentSeedRun,
+	}
+
+	torrentCommand.AddCommand(torrentSeedCommand)
 	torrentCommand.AddCommand(torrentPullCommand)
+	engineCommand.AddCommand(torrentCommand)
+
+	// Decorate the torrent command with any engine-specific flags.
+	engine.TorrentHandler().DecorateCommand(torrentCommand)
 	torrentCommand.PersistentFlags().IntVar(&torrentLowerPort, "lower-port", 6881, "Lower port that listens for peer connections")
 	torrentCommand.PersistentFlags().IntVar(&torrentUpperPort, "upper-port", 6889, "Upper port that listens for peer connections")
 	torrentCommand.PersistentFlags().IntVar(&torrentConnectionsPerSecond, "connections-per-second", 200, "Number of connection attempts that are made per second")
@@ -52,79 +91,57 @@ func init() {
 	torrentCommand.PersistentFlags().IntVar(&torrentEncryptionMode, "encryption-mode", int(bittorrent.FORCED), "Encryption mode for connections. 0 means that only encrypted connections are allowed, 1 that encryption is preferred but not enforced and 2 that encryption is disabled.")
 	torrentCommand.PersistentFlags().BoolVar(&torrentDebug, "debug", false, "BitTorrent protocol verbosity")
 	torrentCommand.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "If specified, HTTP is used in place of HTTPS to talk to the registry")
-	torrentCommand.PersistentFlags().BoolVar(&squashedFlag, "squashed", false, "If specified, the squashed version of the image will be pulled")
-	torrentCommand.PersistentFlags().StringVar(&localIpFlag, "local-ip", "localhost", "The IP address of the local machine. Used to connect Docker to quayctl.")
 	torrentCommand.PersistentFlags().BoolVar(&skipWebSeed, "skip-web-seed", false, "If true, the web seed will not be used when pulling")
 	torrentCommand.PersistentFlags().StringSliceVar(&trackers, "tracker", []string{}, "If specified, will override the tracker(s) used")
 
-	torrentCommand.AddCommand(torrentSeedCommand)
 	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 0, "Duration of the seeding. If not specified, will seed forever.")
-
-	torrentFolder = os.TempDir() + "/quayctl/torrents"
-	torrentFingerprint = bittorrent.ClientFingerprint{"QU", 0, 1, 0, 0}
 }
 
-var torrentCommand = &cobra.Command{
-	Use:   "torrent",
-	Short: "interact with Quay via BitTorrent",
-	Run:   torrentAction,
-}
-
-var torrentSeedCommand = &cobra.Command{
-	Use:   "seed",
-	Short: "upload a container image indefinitely",
-	Run:   torrentSeedRun,
-}
-
-func torrentAction(cmd *cobra.Command, args []string) {
-	cmd.Usage()
-	os.Exit(1)
-}
-
-var torrentPullCommand = &cobra.Command{
-	Use:   "pull",
-	Short: "pull a container image",
-	Run:   torrentPullRun,
-}
-
-func torrentPullRun(cmd *cobra.Command, args []string) {
+func torrentPullRun(cmd *cobra.Command, args []string, engine engine) {
 	if len(args) != 1 {
 		log.Fatal("failed to specify one image to be pulled")
 	}
 
 	image := args[0]
-	torrentConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
+	downloadConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
+	handler := engine.TorrentHandler()
 
-	if squashedFlag {
-		if err := torrentSquashedImage(image, dockerPerformLoad, torrentNoSeed, torrentConfig); err != nil {
-			log.Fatal(err)
-		}
-
-		log.Printf("Successfully pulled squashed image %v", image)
-	} else {
-		if err := torrentImage(image, dockerPerformLoad, dockerSkipExistingLayers, torrentNoSeed, localIpFlag, torrentConfig); err != nil {
-			log.Fatal(err)
-		}
-
-		log.Printf("Successfully pulled image %v", image)
+	// Load the torrents for the image.
+	torrents, ctx, err := handler.RetrieveTorrents(image, missingLayers)
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	// Download the image layer(s).
+	downloadInfo := downloadTorrents(torrents, torrentNoSeed, downloadConfig)
+
+	// Load the image.
+	lerr := handler.LoadImage(image, downloadInfo, ctx)
+	if lerr != nil {
+		log.Fatal(lerr)
+	}
+
+	log.Printf("Successfully pulled image %v", image)
 }
 
-func torrentSeedRun(cmd *cobra.Command, args []string) {
+func torrentSeedRun(cmd *cobra.Command, args []string, engine engine) {
 	if len(args) != 1 {
 		log.Fatal("failed to specify one image to be seeded")
 	}
 
 	image := args[0]
-	torrentConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
+	downloadConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
+	handler := engine.TorrentHandler()
 
-	if squashedFlag {
-		if err := torrentSquashedImage(image, dockerSkipLoad, torrentSeedAfterPull, torrentConfig); err != nil {
-			log.Fatal(err)
-		}
-	} else {
-		if err := torrentImage(image, dockerSkipLoad, dockerAllLayers, torrentSeedAfterPull, localIpFlag, torrentConfig); err != nil {
-			log.Fatal(err)
-		}
+	// Load the torrents for the image.
+	torrents, _, err := handler.RetrieveTorrents(image, allLayers)
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	// Seed the image layer(s).
+	downloadInfo := downloadTorrents(torrents, torrentSeedAfterPull, downloadConfig)
+
+	// Wait for seeding to complete.
+	<-downloadInfo.completeChannel
 }

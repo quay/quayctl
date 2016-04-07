@@ -1,4 +1,4 @@
-// Copyright 2015 CoreOS, Inc.
+// Copyright 2016 CoreOS, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,15 +24,38 @@ import (
 var rootCommand = &cobra.Command{
 	Use:   "quayctl",
 	Short: "Quay cuddle",
-	Long:  "Various utilties involving the Quay container registry",
+	Long:  "Various utilities for working with the Quay container registry",
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Usage()
 		os.Exit(1)
 	},
 }
 
+// addEngineCommands adds a command for each container engine to the root command, as well
+// as generating the engine-specific commands.
+func addEngineCommands(rootCommand *cobra.Command) {
+	// Add each of the engines.
+	engines := []engine{&dockerEngine{}}
+	for _, engine := range engines {
+		engineCommand := &cobra.Command{
+			Use:   engine.Name(),
+			Short: engine.Title(),
+			Long:  fmt.Sprintf("Invoke quayctl commands for %s", engine.Title()),
+			Run: func(cmd *cobra.Command, args []string) {
+				cmd.Usage()
+				os.Exit(1)
+			},
+		}
+
+		rootCommand.AddCommand(engineCommand)
+
+		// Add the `torrent` commands to each of the engines.
+		addTorrentCommands(engine, engineCommand)
+	}
+}
+
 func init() {
-	rootCommand.AddCommand(torrentCommand)
+	addEngineCommands(rootCommand)
 	rootCommand.AddCommand(versionCommand)
 }
 
