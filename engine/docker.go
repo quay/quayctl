@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package engine
 
 import (
 	"errors"
@@ -35,18 +35,18 @@ var (
 	localIpFlag  string
 )
 
-// dockerEngine defines an engine interface for interacting with Docker.
-type dockerEngine struct{}
+// DockerEngine defines an engine interface for interacting with Docker.
+type DockerEngine struct{}
 
-func (de dockerEngine) Name() string {
+func (de DockerEngine) Name() string {
 	return "docker"
 }
 
-func (de dockerEngine) Title() string {
+func (de DockerEngine) Title() string {
 	return "Docker Engine"
 }
 
-func (de dockerEngine) TorrentHandler() engineTorrentHandler {
+func (de DockerEngine) TorrentHandler() engineTorrentHandler {
 	return &dockerTorrentHandler{}
 }
 
@@ -58,12 +58,12 @@ func (dth dockerTorrentHandler) DecorateCommand(command *cobra.Command) {
 	command.PersistentFlags().StringVar(&localIpFlag, "local-ip", "localhost", "The IP address of the local machine. Used to connect Docker to quayctl.")
 }
 
-func (dth dockerTorrentHandler) RetrieveTorrents(image string, option layersOption) ([]torrentInfo, interface{}, error) {
+func (dth dockerTorrentHandler) RetrieveTorrents(image string, insecureFlag bool, option layersOption) ([]torrentInfo, interface{}, error) {
 	if squashedFlag {
-		return dth.retrieveTorrentsForSquashed(image)
+		return dth.retrieveTorrentsForSquashed(image, insecureFlag)
 	}
 
-	return dth.retrieveTorrents(image, option)
+	return dth.retrieveTorrents(image, insecureFlag, option)
 }
 
 func (dth dockerTorrentHandler) LoadImage(image string, downloadInfo downloadTorrentInfo, ctx interface{}) error {
@@ -76,10 +76,10 @@ func (dth dockerTorrentHandler) LoadImage(image string, downloadInfo downloadTor
 
 func (dth dockerTorrentHandler) loadSquashedImage(image string, downloadInfo downloadTorrentInfo, ctx interface{}) error {
 	// Wait for the torrent to complete.
-	<-downloadInfo.completeChannel
+	<-downloadInfo.CompleteChannel
 
 	// Call docker-load on the squashed image.
-	path, _ := downloadInfo.torrentPaths.Get("squashed")
+	path, _ := downloadInfo.TorrentPaths.Get("squashed")
 	squashedFile, err := os.Open(path.(string))
 	if err != nil {
 		return err
@@ -108,13 +108,13 @@ func (dth dockerTorrentHandler) loadImage(image string, downloadInfo downloadTor
 	blobPaths := map[string]string{}
 	for _, layer := range layers {
 		blobSum := v1Manifest.FSLayers[layer.index].BlobSum.String()
-		<-downloadInfo.downloadedChannels[blobSum]
-		blobPath, _ := downloadInfo.torrentPaths.Get(blobSum)
+		<-downloadInfo.DownloadedChannels[blobSum]
+		blobPath, _ := downloadInfo.TorrentPaths.Get(blobSum)
 		blobPaths[blobSum] = blobPath.(string)
 	}
 
-	if downloadInfo.hasProgressBars {
-		downloadInfo.pool.Stop()
+	if downloadInfo.HasProgressBars {
+		downloadInfo.Pool.Stop()
 	}
 
 	// Perform the docker load.
@@ -122,7 +122,7 @@ func (dth dockerTorrentHandler) loadImage(image string, downloadInfo downloadTor
 }
 
 // retrieveTorrentsForSquashed returns the torrent for downloading a squashed Docker image.
-func (dth dockerTorrentHandler) retrieveTorrentsForSquashed(image string) ([]torrentInfo, interface{}, error) {
+func (dth dockerTorrentHandler) retrieveTorrentsForSquashed(image string, insecureFlag bool) ([]torrentInfo, interface{}, error) {
 	// Retrieve the credentials (if any) for the current image.
 	credentials, _ := dockerdist.GetAuthCredentials(image)
 
@@ -162,7 +162,7 @@ func (dth dockerTorrentHandler) retrieveTorrentsForSquashed(image string) ([]tor
 }
 
 // retrieveTorrents returns the torrents for downloading a Docker image.
-func (dth dockerTorrentHandler) retrieveTorrents(image string, option layersOption) ([]torrentInfo, interface{}, error) {
+func (dth dockerTorrentHandler) retrieveTorrents(image string, insecureFlag bool, option layersOption) ([]torrentInfo, interface{}, error) {
 	// Retrieve the credentials (if any) for the current image.
 	credentials, _ := dockerdist.GetAuthCredentials(image)
 
@@ -186,19 +186,19 @@ func (dth dockerTorrentHandler) retrieveTorrents(image string, option layersOpti
 
 	// Build the lists of layers and blobs that we need to download.
 	layers, blobs := dth.requiredLayersAndBlobs(v1Manifest, option)
-	if option == missingLayers && len(layers) == 0 {
+	if option == MissingLayers && len(layers) == 0 {
 		log.Printf("All layers already downloaded")
 		return []torrentInfo{}, nil, nil
 	}
 
 	// Build the list of torrent URLs, one per file system layer needed for download.
 	dctx := dockerContext{v1Manifest, layers, named}
-	return dth.buildTorrentInfoForBlob(named, blobs, credentials), dctx, nil
+	return dth.buildTorrentInfoForBlob(named, blobs, credentials, insecureFlag), dctx, nil
 }
 
 // buildTorrentInfoForBlob builds the slice of torrentInfo structs representing each blob sum to be
 // downloaded, along with its torrent URL.
-func (dth dockerTorrentHandler) buildTorrentInfoForBlob(named reference.Named, blobs []schema1.FSLayer, credentials types.AuthConfig) []torrentInfo {
+func (dth dockerTorrentHandler) buildTorrentInfoForBlob(named reference.Named, blobs []schema1.FSLayer, credentials types.AuthConfig, insecureFlag bool) []torrentInfo {
 	blobSet := map[string]struct{}{}
 
 	var torrents = make([]torrentInfo, 0)
@@ -256,7 +256,7 @@ func (dth dockerTorrentHandler) loadLayerInfo(layers []schema1.History) []layerI
 
 // requiredLayersAndBlobs returns the list of required layers and blobs that we need to download.
 func (dth dockerTorrentHandler) requiredLayersAndBlobs(manifest *schema1.SignedManifest, option layersOption) ([]layerInfo, []schema1.FSLayer) {
-	if option == allLayers {
+	if option == AllLayers {
 		return dth.loadLayerInfo(manifest.History), manifest.FSLayers
 	}
 

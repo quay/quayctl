@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreos/quayctl/bittorrent"
+	"github.com/coreos/quayctl/engine"
 )
 
 var (
@@ -46,7 +47,7 @@ func init() {
 }
 
 // addTorrentCommands adds the torrent pull and seed commands to the engine command.
-func addTorrentCommands(engine engine, engineCommand *cobra.Command) {
+func addTorrentCommands(engine engine.ContainerEngine, engineCommand *cobra.Command) {
 	localTorrentPullRun := func(cmd *cobra.Command, args []string) {
 		torrentPullRun(cmd, args, engine)
 	}
@@ -97,23 +98,34 @@ func addTorrentCommands(engine engine, engineCommand *cobra.Command) {
 	torrentSeedCommand.Flags().DurationVar(&torrentSeedDuration, "duration", 0, "Duration of the seeding. If not specified, will seed forever.")
 }
 
-func torrentPullRun(cmd *cobra.Command, args []string, engine engine) {
+func torrentPullRun(cmd *cobra.Command, args []string, containerEngine engine.ContainerEngine) {
 	if len(args) != 1 {
 		log.Fatal("failed to specify one image to be pulled")
 	}
 
 	image := args[0]
 	downloadConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
-	handler := engine.TorrentHandler()
+	handler := containerEngine.TorrentHandler()
 
 	// Load the torrents for the image.
-	torrents, ctx, err := handler.RetrieveTorrents(image, missingLayers)
+	torrents, ctx, err := handler.RetrieveTorrents(image, insecureFlag, engine.MissingLayers)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Download the image layer(s).
-	downloadInfo := downloadTorrents(torrents, torrentNoSeed, downloadConfig)
+	clientConfig := bittorrent.ClientConfig{
+		Fingerprint:          torrentFingerprint,
+		LowerListenPort:      torrentLowerPort,
+		UpperListenPort:      torrentUpperPort,
+		ConnectionsPerSecond: torrentConnectionsPerSecond,
+		MaxDownloadRate:      torrentMaxDowloadRate * 1024,
+		MaxUploadRate:        torrentMaxUploadRate * 1024,
+		Encryption:           bittorrent.EncryptionMode(torrentEncryptionMode),
+		Debug:                torrentDebug,
+	}
+
+	downloadInfo := engine.DownloadTorrents(torrents, torrentFolder, engine.TorrentNoSeed, torrentSeedDuration, clientConfig, downloadConfig)
 
 	// Load the image.
 	lerr := handler.LoadImage(image, downloadInfo, ctx)
@@ -124,24 +136,35 @@ func torrentPullRun(cmd *cobra.Command, args []string, engine engine) {
 	log.Printf("Successfully pulled image %v", image)
 }
 
-func torrentSeedRun(cmd *cobra.Command, args []string, engine engine) {
+func torrentSeedRun(cmd *cobra.Command, args []string, containerEngine engine.ContainerEngine) {
 	if len(args) != 1 {
 		log.Fatal("failed to specify one image to be seeded")
 	}
 
 	image := args[0]
 	downloadConfig := bittorrent.DownloadConfig{skipWebSeed, trackers}
-	handler := engine.TorrentHandler()
+	handler := containerEngine.TorrentHandler()
 
 	// Load the torrents for the image.
-	torrents, _, err := handler.RetrieveTorrents(image, allLayers)
+	torrents, _, err := handler.RetrieveTorrents(image, insecureFlag, engine.AllLayers)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Seed the image layer(s).
-	downloadInfo := downloadTorrents(torrents, torrentSeedAfterPull, downloadConfig)
+	clientConfig := bittorrent.ClientConfig{
+		Fingerprint:          torrentFingerprint,
+		LowerListenPort:      torrentLowerPort,
+		UpperListenPort:      torrentUpperPort,
+		ConnectionsPerSecond: torrentConnectionsPerSecond,
+		MaxDownloadRate:      torrentMaxDowloadRate * 1024,
+		MaxUploadRate:        torrentMaxUploadRate * 1024,
+		Encryption:           bittorrent.EncryptionMode(torrentEncryptionMode),
+		Debug:                torrentDebug,
+	}
+
+	downloadInfo := engine.DownloadTorrents(torrents, torrentFolder, engine.TorrentSeedAfterPull, torrentSeedDuration, clientConfig, downloadConfig)
 
 	// Wait for seeding to complete.
-	<-downloadInfo.completeChannel
+	<-downloadInfo.CompleteChannel
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package engine
 
 import (
 	"fmt"
@@ -34,8 +34,8 @@ import (
 type torrentSeedOption int
 
 const (
-	torrentNoSeed torrentSeedOption = iota
-	torrentSeedAfterPull
+	TorrentNoSeed torrentSeedOption = iota
+	TorrentSeedAfterPull
 )
 
 // torrentInfo holds the blobSum and torrent path for a torrent.
@@ -45,19 +45,22 @@ type torrentInfo struct {
 	title       string
 }
 
-// downloadTorrentInfo contains data structures populated and signaled by the downloadTorrents
+// downloadTorrentInfo contains data structures populated and signaled by the DownloadTorrents
 // method.
 type downloadTorrentInfo struct {
-	downloadedChannels map[string]chan struct{} // Map of torrent ID -> channel to await download
-	completeChannel    chan struct{}            // Channel to await completion of all torrent ops
-	pool               *pb.Pool                 // ProgressBar pool
-	hasProgressBars    bool                     // Whether progress bars are running.
-	torrentPaths       cmap.ConcurrentMap       // Map from torrent ID -> downloaded path
+	DownloadedChannels map[string]chan struct{} // Map of torrent ID -> channel to await download
+	CompleteChannel    chan struct{}            // Channel to await completion of all torrent ops
+	Pool               *pb.Pool                 // ProgressBar pool
+	HasProgressBars    bool                     // Whether progress bars are running.
+	TorrentPaths       cmap.ConcurrentMap       // Map from torrent ID -> downloaded path
 }
 
-// downloadTorrents starts the downloads of all the specified torrents, with optional seeding once
+// DownloadTorrents starts the downloads of all the specified torrents, with optional seeding once
 // completed. Returns immediately with a downloadTorrentInfo struct.
-func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption, downloadConfig bittorrent.DownloadConfig) downloadTorrentInfo {
+func DownloadTorrents(torrents []torrentInfo, torrentFolder string, seedOption torrentSeedOption,
+	torrentSeedDuration time.Duration, clientConfig bittorrent.ClientConfig,
+	downloadConfig bittorrent.DownloadConfig) downloadTorrentInfo {
+
 	// Add a channel for each torrent to track state.
 	torrentDownloadedChannels := map[string]chan struct{}{}
 	torrentCompletedChannels := map[string]chan struct{}{}
@@ -89,13 +92,13 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption, down
 		hasProgressBars = false
 	}
 
-	if torrentDebug {
+	if clientConfig.Debug {
 		pool.Stop()
 		hasProgressBars = false
 	}
 
 	// Initialize Bittorrent client.
-	bt, err := initBitTorrentClient()
+	bt, err := initBitTorrentClient(torrentFolder, clientConfig)
 	if err != nil {
 		panic(fmt.Errorf("Could not initialize torrent client: %v", err))
 	}
@@ -106,7 +109,7 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption, down
 	// For each torrent, download the data in parallel, call post-processing and (optionally)
 	// seed.
 	var localSeedDuration *time.Duration
-	if seedOption == torrentSeedAfterPull {
+	if seedOption == TorrentSeedAfterPull {
 		localSeedDuration = &torrentSeedDuration
 	}
 
@@ -215,23 +218,14 @@ func downloadTorrents(torrents []torrentInfo, seedOption torrentSeedOption, down
 }
 
 // initBitTorrentClient inityializes a bittorrent client.
-func initBitTorrentClient() (*bittorrent.Client, error) {
+func initBitTorrentClient(torrentFolder string, clientConfig bittorrent.ClientConfig) (*bittorrent.Client, error) {
 	// Ensure destination folder exists.
 	if err := os.MkdirAll(torrentFolder, 0755); err != nil {
 		return nil, err
 	}
 
 	// Create client.
-	bt := bittorrent.NewClient(bittorrent.ClientConfig{
-		Fingerprint:          torrentFingerprint,
-		LowerListenPort:      torrentLowerPort,
-		UpperListenPort:      torrentUpperPort,
-		ConnectionsPerSecond: torrentConnectionsPerSecond,
-		MaxDownloadRate:      torrentMaxDowloadRate * 1024,
-		MaxUploadRate:        torrentMaxUploadRate * 1024,
-		Encryption:           bittorrent.EncryptionMode(torrentEncryptionMode),
-		Debug:                torrentDebug,
-	})
+	bt := bittorrent.NewClient(clientConfig)
 
 	// Start client.
 	if err := bt.Start(); err != nil {

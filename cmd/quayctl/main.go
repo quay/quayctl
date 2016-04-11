@@ -19,6 +19,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/coreos/quayctl/engine"
 )
 
 var rootCommand = &cobra.Command{
@@ -35,7 +37,7 @@ var rootCommand = &cobra.Command{
 // as generating the engine-specific commands.
 func addEngineCommands(rootCommand *cobra.Command) {
 	// Add each of the engines.
-	engines := []engine{&dockerEngine{}}
+	engines := []engine.ContainerEngine{&engine.DockerEngine{}}
 	for _, engine := range engines {
 		engineCommand := &cobra.Command{
 			Use:   engine.Name(),

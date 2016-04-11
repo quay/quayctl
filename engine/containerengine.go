@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package engine
 
 import (
 	"github.com/spf13/cobra"
@@ -25,16 +25,16 @@ type layersOption int
 const (
 	// allLayers specifies that torrents should be returned for all layers, regardless of
 	// whether they are present within the container engine's layer store.
-	allLayers layersOption = iota
+	AllLayers layersOption = iota
 
 	// missingLayers specifies that torrents should be returned for only those layers missing
 	// within the container engine's layer store.
-	missingLayers
+	MissingLayers
 )
 
-// An engine represents a container engine (e.g. Docker or rkt) with which quayctl
+// ContainerEngine represents a container engine (e.g. Docker or rkt) with which quayctl
 // can interact.
-type engine interface {
+type ContainerEngine interface {
 	// Name is a single identifier for the engine, used as the first parameter
 	// on the quayctl command line.
 	Name() string
@@ -54,7 +54,7 @@ type engineTorrentHandler interface {
 	DecorateCommand(command *cobra.Command)
 
 	// RetrieveTorrents retrieves all the torrents to be downloaded for the container image.
-	RetrieveTorrents(image string, option layersOption) ([]torrentInfo, interface{}, error)
+	RetrieveTorrents(image string, insecureFlag bool, option layersOption) ([]torrentInfo, interface{}, error)
 
 	// LoadImage performs the loading of the downloaded container image into the container
 	// engine.
