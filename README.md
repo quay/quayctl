@@ -142,8 +142,8 @@ To compile:
 
 ```
 $ export PLATFORM='darwin-x64'
-$ go get github.com/coreos/quayctl
-$ cd $GOPATH/github.com/coreos/quayctl
+$ go get -d github.com/coreos/quayctl
+$ cd $GOPATH/src/github.com/coreos/quayctl
 $ make $PLATFORM
 ```
 
