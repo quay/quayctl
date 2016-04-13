@@ -37,7 +37,7 @@ var rootCommand = &cobra.Command{
 // as generating the engine-specific commands.
 func addEngineCommands(rootCommand *cobra.Command) {
 	// Add each of the engines.
-	engines := []engine.ContainerEngine{&engine.DockerEngine{}}
+	engines := []engine.ContainerEngine{&engine.RktEngine{}, &engine.DockerEngine{}}
 	for _, engine := range engines {
 		engineCommand := &cobra.Command{
 			Use:   engine.Name(),
