@@ -43,7 +43,7 @@ func (de DockerEngine) Name() string {
 }
 
 func (de DockerEngine) Title() string {
-	return "Docker Engine"
+	return "Commands for pulling images into Docker from Quay"
 }
 
 func (de DockerEngine) TorrentHandler() engineTorrentHandler {
