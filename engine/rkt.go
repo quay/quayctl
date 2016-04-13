@@ -37,7 +37,7 @@ func (re RktEngine) Name() string {
 }
 
 func (re RktEngine) Title() string {
-	return "rkt"
+	return "Commands for pulling images into rkt from Quay"
 }
 
 func (re RktEngine) TorrentHandler() engineTorrentHandler {
