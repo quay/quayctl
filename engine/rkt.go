@@ -16,6 +16,7 @@ package engine
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -46,6 +47,42 @@ func (re RktEngine) TorrentHandler() engineTorrentHandler {
 
 type rktContext struct {
 	signatureUrl *url.URL
+}
+
+// rktConfig is a structure representing the data that is returned by the `rkt config` command.
+type rktConfig struct {
+	Stage0 []stage0config `json:"stage0"`
+}
+
+type rktKind string
+
+const (
+	rktKindAuth       rktKind = "auth"
+	rktKindDockerAuth         = "dockerAuth"
+	rktKindPaths              = "paths"
+	rktKindStage1             = "stage1"
+)
+
+type rktAuthType string
+
+const (
+	rktAuthBasic rktAuthType = "basic"
+	rktAuthToken             = "token"
+)
+
+// stage0config is the config for rkt stage0.
+type stage0config struct {
+	RktKind     rktKind        `json:"rktKind"`
+	Domains     []string       `json:"domains"`
+	AuthType    rktAuthType    `json:"type"`
+	Credentials rktCredentials `json:"credentials"`
+}
+
+// rktCredentials represents credentials stored for use by rkt.
+type rktCredentials struct {
+	Username string `json:"user"`
+	Password string `json:"password"`
+	Token    string `json:"token"`
 }
 
 // rktTorrentHandler defines an interface for pulling a rkt image via torrent.
@@ -95,11 +132,32 @@ func (rth rktTorrentHandler) RetrieveTorrents(image string, insecureFlag bool, o
 		signatureUrl.Scheme = "http"
 	}
 
-	// TODO: uncomment and expand properly once `rkt config` has been released.
-	//if credentials.Username != "" {
-	//		aciUrl.User = url.UserPassword(credentials.Username, credentials.Password)
-	//      signatureUrl.User = url.UserPassword(credentials.Username, credentials.Password)
-	//	}
+	// Find any auth credentials for the requests.
+	cmd := exec.Command("rkt", "config")
+	data, err := cmd.CombinedOutput()
+	if err != nil {
+		return []torrentInfo{}, nil, fmt.Errorf("Could call rkt config: %v", err)
+	}
+
+	// Unmarshal the configuration data.
+	topLevel := rktConfig{}
+	err = json.Unmarshal(data, &topLevel)
+	if err != nil {
+		return []torrentInfo{}, nil, fmt.Errorf("Could unmarshal rkt config data: %v", err)
+	}
+
+	// Search for auth for the domain.
+	for _, config := range topLevel.Stage0 {
+		if config.RktKind == rktKindAuth && config.AuthType == rktAuthBasic {
+			for _, domain := range config.Domains {
+				if domain == aciUrl.Host {
+					log.Printf("Found credentials for image %v", image)
+					aciUrl.User = url.UserPassword(config.Credentials.Username, config.Credentials.Password)
+					signatureUrl.User = url.UserPassword(config.Credentials.Username, config.Credentials.Password)
+				}
+			}
+		}
+	}
 
 	log.Printf("Downloading torrent for image %v", image)
 	torrent := torrentInfo{
