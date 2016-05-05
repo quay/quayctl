@@ -258,8 +258,9 @@ func NewClient(config ClientConfig) *Client {
 
 	session.SetAlertMask(uint(alertMask))
 
-	// Load all extensions.
-	session.AddExtensions()
+	// Load smartban and peer exchange extensions.
+	session.AddExtensionByName("smart_ban")
+	session.AddExtensionByName("ut_pex")
 
 	return &Client{
 		session:  session,

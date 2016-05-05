@@ -57,10 +57,10 @@
 			"revisionTime": "2016-05-03T00:57:44Z"
 		},
 		{
-			"checksumSHA1": "v2vh0cggRBHDGpsrodURoUWf+pc=",
+			"checksumSHA1": "EmmANf537XSCZYzhYKdPfFky/NA=",
 			"path": "github.com/coreos/libtorrent-go",
-			"revision": "ff46e7b9f61fadaeae66d9582bcf4fb4d5a66bad",
-			"revisionTime": "2016-03-08T20:56:36Z"
+			"revision": "150e9d85fa65538cd450f24c3d8da1b762f26d98",
+			"revisionTime": "2016-05-04T23:50:39Z"
 		},
 		{
 			"checksumSHA1": "yQI5fx1KG5rJZ24PtnEOiJBxz1c=",
