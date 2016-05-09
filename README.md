@@ -144,13 +144,13 @@ Downloading manifest for image quay.io/myprivate/imagehere...
 
 In order for Quay to serve the torrent for an ACI image, the image must have been previously
 computed and cached. ACI images are not created until they are first requested, so a fetch via
-`rkt fetch` is required before `torrent pull --squashed`
+`rkt fetch` is required before `rkt torrent pull`
 can be used. We are currently working on removing of this restriction.
 
 ### I receive a 404 error when trying to pull a squashed image
 
 In order for Quay to serve the torrent for a squashed image, the image must have been previously computed and cached. Squashed images are not created until
-they are first requested, so a download of the squashed image via the normal `curl` method is required before `torrent pull --squashed`
+they are first requested, so a download of the squashed image via the normal `curl` method is required before `docker torrent pull --squashed`
 can be used. We are currently working on removing of this restriction.
 
 ### I want to use my own torrent tracker(s)
