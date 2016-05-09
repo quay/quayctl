@@ -1,7 +1,6 @@
 # quayctl
 
 [![Build Status](https://api.travis-ci.org/coreos/quayctl.svg?branch=master "Build Status")](https://travis-ci.org/coreos/quayctl)
-[![Docker Repository on Quay](https://quay.io/repository/coreos/quayctl/status "Docker Repository on Quay")](https://quay.io/repository/coreos/quayctl)
 [![Go Report Card](https://goreportcard.com/badge/coreos/quayctl "Go Report Card")](https://goreportcard.com/report/coreos/quayctl)
 [![GoDoc](https://godoc.org/github.com/coreos/quayctl?status.svg "GoDoc")](https://godoc.org/github.com/coreos/quayctl)
 [![IRC Channel](https://img.shields.io/badge/freenode-%23quay-blue.svg "IRC Channel")](http://webchat.freenode.net/?channels=quay)
