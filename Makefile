@@ -49,7 +49,7 @@ RM = rm
 include platform.mk
 
 # Additional tags and LDFLAGS to use during the compilation.
-GITHASH = $(shell $(GIT) rev-parse HEAD)
+GITHASH = $(shell $(GIT) rev-parse --short HEAD)
 BUILDTIME = $(shell $(DATE) -u +%Y-%m-%d_%I:%M:%S%p)
 GO_LDFLAGS += -w -X "main.githash=$(GITHASH)" -X "main.buildtime=$(BUILDTIME)"
 GO_GCFLAGS +=
